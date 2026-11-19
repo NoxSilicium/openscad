@@ -2,12 +2,19 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
+#include <functional>
 #include <vector>
 
 #if ENABLE_TBB
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_for_each.h>
 #endif
+
+namespace OpenSCADParallel {
+bool openMPEnabled();
+void forEachChunk(size_t count, size_t chunkSize, const std::function<void(size_t, size_t)>& work);
+}  // namespace OpenSCADParallel
 
 template <class InputIterator, class OutputIterator, class Operation>
 void parallelizable_transform(const InputIterator begin1, const InputIterator end1, OutputIterator out,

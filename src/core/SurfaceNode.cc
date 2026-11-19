@@ -29,7 +29,6 @@
 #include <algorithm>
 #include <boost/algorithm/string.hpp>
 #include <boost/assign/std/vector.hpp>
-#include <boost/functional/hash.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/tokenizer.hpp>
 #include <cstddef>
@@ -40,7 +39,6 @@
 #include <new>
 #include <sstream>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -55,11 +53,14 @@
 #include "handle_dep.h"
 #include "io/fileutils.h"
 #include "lodepng/lodepng.h"
+#include "utils/parallel.h"
 #include "utils/printutils.h"
 using namespace boost::assign;  // bring 'operator+=()' into scope
 
 #include <filesystem>
 namespace fs = std::filesystem;
+
+static constexpr size_t heightmapSamplesPerChunk = 65536;
 
 static std::shared_ptr<AbstractNode> builtin_surface(const ModuleInstantiation *inst,
                                                      Arguments arguments)
@@ -95,20 +96,26 @@ void SurfaceNode::convert_image(img_data_t& data, const std::vector<uint8_t>& im
   data.width = width;
   data.height = height;
   data.resize((size_t)width * height);
-  double min_val = 200;
-  for (unsigned int y = 0; y < height; ++y) {
-    for (unsigned int x = 0; x < width; ++x) {
-      long idx = 8l * (y * width + x);
-      uint16_t r = (static_cast<uint16_t>(img[idx]) << 8) | img[idx + 1];
-      uint16_t g = (static_cast<uint16_t>(img[idx + 2]) << 8) | img[idx + 3];
-      uint16_t b = (static_cast<uint16_t>(img[idx + 4]) << 8) | img[idx + 5];
-      double pixel = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-      double z = 100.0 / 65535.0 * (invert ? 0.0 - pixel : pixel);
-      data[x + (width * (height - 1 - y))] = z;
-      min_val = std::min(z, min_val);
+  const size_t rowsPerChunk = std::max<size_t>(1, heightmapSamplesPerChunk / std::max(1u, width));
+  std::vector<double> minima((height + rowsPerChunk - 1) / rowsPerChunk);
+  OpenSCADParallel::forEachChunk(height, rowsPerChunk, [&](size_t first, size_t last) {
+    double minimum = 200;
+    for (size_t y = first; y < last; ++y) {
+      const size_t destination = width * (height - 1 - y);
+      for (size_t x = 0; x < width; ++x) {
+        const size_t idx = 8 * (y * width + x);
+        uint16_t r = (static_cast<uint16_t>(img[idx]) << 8) | img[idx + 1];
+        uint16_t g = (static_cast<uint16_t>(img[idx + 2]) << 8) | img[idx + 3];
+        uint16_t b = (static_cast<uint16_t>(img[idx + 4]) << 8) | img[idx + 5];
+        double pixel = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        double z = 100.0 / 65535.0 * (invert ? 0.0 - pixel : pixel);
+        data.storage[destination + x] = z;
+        minimum = std::min(z, minimum);
+      }
     }
-  }
-  data.min_val = min_val;
+    minima[first / rowsPerChunk] = minimum;
+  });
+  data.min_val = minima.empty() ? 200 : *std::min_element(minima.begin(), minima.end());
 }
 
 bool SurfaceNode::is_png(std::vector<uint8_t>& png) const
@@ -176,18 +183,15 @@ img_data_t SurfaceNode::read_dat(std::string filename) const
     return data;
   }
 
-  int lines = 0, columns = 0;
+  size_t columns = 0;
   double min_val =
     1;  // this balances out with the (min_val-1) inside createGeometry, to match old behavior
 
   using tokenizer = boost::tokenizer<boost::char_separator<char>>;
   boost::char_separator<char> sep(" \t");
 
-  // We use an unordered map because the data file may not be rectangular,
-  // and we may need to fill in some bits.
-  using unordered_image_data_t =
-    std::unordered_map<std::pair<int, int>, double, boost::hash<std::pair<int, int>>>;
-  unordered_image_data_t unordered_data;
+  std::vector<double> values;
+  std::vector<size_t> rowOffsets{0};
 
   while (!stream.eof()) {
     std::string line;
@@ -197,13 +201,11 @@ img_data_t SurfaceNode::read_dat(std::string filename) const
     }
     if (line.size() == 0 && stream.eof()) break;
 
-    int col = 0;
     tokenizer tokens(line, sep);
     try {
       for (const auto& token : tokens) {
         auto v = boost::lexical_cast<double>(token);
-        unordered_data[std::make_pair(lines, col++)] = v;
-        if (col > columns) columns = col;
+        values.push_back(v);
         min_val = std::min(v, min_val);
       }
     } catch (const boost::bad_lexical_cast& blc) {
@@ -213,18 +215,28 @@ img_data_t SurfaceNode::read_dat(std::string filename) const
       return data;
     }
 
-    lines++;
+    columns = std::max(columns, values.size() - rowOffsets.back());
+    rowOffsets.push_back(values.size());
   }
 
+  const size_t lines = rowOffsets.size() - 1;
   data.width = columns;
   data.height = lines;
   data.min_val = min_val;
 
-  // Now convert the unordered, possibly non-rectangular data into a well ordered vector
-  // for faster access and reduced memory usage.
-  data.resize((size_t)lines * columns);
-  for (int i = 0; i < lines; ++i)
-    for (int j = 0; j < columns; ++j) data[i * columns + j] = unordered_data[std::make_pair(i, j)];
+  if (values.size() == lines * columns) {
+    data.storage = std::move(values);
+  } else {
+    // The missing values in shorter rows retain their zero initialization.
+    data.resize(lines * columns);
+    const size_t rowsPerChunk = std::max<size_t>(1, heightmapSamplesPerChunk / columns);
+    OpenSCADParallel::forEachChunk(lines, rowsPerChunk, [&](size_t first, size_t last) {
+      for (size_t i = first; i < last; ++i) {
+        std::copy(values.begin() + rowOffsets[i], values.begin() + rowOffsets[i + 1],
+                  data.storage.begin() + i * columns);
+      }
+    });
+  }
 
   return data;
 }

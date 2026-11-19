@@ -5,6 +5,9 @@
 [![Visit our IRC channel](https://kiwiirc.com/buttons/irc.libera.chat/openscad.png)](https://kiwiirc.com/client/irc.libera.chat/#openscad)
 
 # What is OpenSCAD?
+OpenSCAD 2026 is a customized build of OpenSCAD. English is the working
+language of this repository.
+
 <p><a href="https://opencollective.com/openscad/donate"><img align="right" src="https://opencollective.com/openscad/donate/button@2x.png?color=white" width="200"/></a>
 
 OpenSCAD is a software for creating solid 3D CAD objects. It is free software and
@@ -184,10 +187,10 @@ After building dependencies using one of the following options, follow the instr
 
 After compiling, run `bash scripts/macosx-package-2026.sh build` (replace
 `build` with your CMake build directory) to create `OpenSCAD 2026.app` beside
-the standard bundle. The package uses a light interface, the French message
-catalog, and a separate preferences profile. It includes lib3mf when linked
-and uses the other libraries from the build machine. The instructions for
-building on Linux, BSD, and Windows follow below.
+the standard bundle. The package uses a light interface and a separate
+preferences profile. It includes lib3mf when linked and uses the other
+libraries from the build machine. Set `OPENSCAD_MESSAGE_LOCALE` explicitly
+when packaging to override the system message locale.
 
 ### Building for Linux/BSD
 
@@ -338,6 +341,13 @@ instance.callMain([
 First, run `cmake -B build -DEXPERIMENTAL=1` to generate a Makefile in the `build` folder.
 
 Then run `cmake --build build`. Finally, on Linux you might run `cmake --install build` as root.
+
+To enable OpenMP for large mesh triangulation, STL formatting, and heightmap
+processing, configure with `-DENABLE_OPENMP=ON`. This requires a C++ compiler
+and runtime supported by CMake's `FindOpenMP`. With Apple Clang and Homebrew,
+install `libomp` and add `-DOpenMP_ROOT="$(brew --prefix libomp)"` when
+configuring. `OMP_NUM_THREADS` limits the OpenMP thread count at runtime.
+`OPENSCAD_NO_PARALLEL=1` disables OpenSCAD's parallel loops for comparisons.
 
 If you had problems compiling from source, raise a new issue in the
 [issue tracker on the github page](https://github.com/openscad/openscad/issues).

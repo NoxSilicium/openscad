@@ -26,20 +26,24 @@ plist="$app/Contents/Info.plist"
   -c 'Add :CFBundleDisplayName string OpenSCAD 2026' \
   -c 'Set :CFBundleIdentifier org.openscad.OpenSCAD.arm64' \
   -c 'Add :OpenSCADSettingsName string OpenSCADARM' \
-  -c 'Add :OpenSCADMessageLocale string fr_FR.UTF-8' \
   -c 'Add :NSRequiresAquaSystemAppearance bool true' \
   -c 'Add :CFBundleLocalizations array' \
-  -c 'Add :CFBundleLocalizations:0 string fr' \
-  -c 'Add :CFBundleLocalizations:1 string en' \
+  -c 'Add :CFBundleLocalizations:0 string en' \
   "$plist"
+
+if [[ -n "${OPENSCAD_MESSAGE_LOCALE:-}" ]]; then
+  /usr/libexec/PlistBuddy -c "Add :OpenSCADMessageLocale string $OPENSCAD_MESSAGE_LOCALE" "$plist"
+fi
 
 for catalog in "$source_dir"/locale/*/LC_MESSAGES/openscad.mo; do
   [[ -f "$catalog" ]] || continue
-  bundled_catalog="$app/Contents/Resources/locale/${catalog#"$source_dir/locale/"}"
+  relative_path=${catalog#"$source_dir/locale/"}
+  language=${relative_path%%/*}
+  bundled_catalog="$app/Contents/Resources/locale/$relative_path"
   mkdir -p "$(dirname "$bundled_catalog")"
   install -m 644 "$catalog" "$bundled_catalog"
+  /usr/libexec/PlistBuddy -c "Add :CFBundleLocalizations: string ${language//_/-}" "$plist"
 done
-test -s "$app/Contents/Resources/locale/fr/LC_MESSAGES/openscad.mo"
 
 binary="$app/Contents/MacOS/OpenSCAD"
 lib3mf_load_path=$(otool -L "$binary" | sed -nE 's/^[[:space:]]+(.+\/lib3mf(\.[^/]*)?\.dylib) \(compatibility version .*/\1/p')

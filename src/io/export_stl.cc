@@ -31,6 +31,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <ios>
 #include <memory>
 #include <ostream>
@@ -43,6 +44,7 @@
 #include "geometry/PolySetUtils.h"
 #include "geometry/linalg.h"
 #include "io/export.h"
+#include "utils/parallel.h"
 #include "utils/printutils.h"
 
 #ifdef ENABLE_MANIFOLD
@@ -84,103 +86,108 @@ std::string toString(const Vector3d& v)
   return buffer;
 }
 
-int32_t flipEndianness(int32_t x)
+Vector3d facet_normal(const Vector3d& p0, const Vector3d& p1, const Vector3d& p2)
 {
-  return ((x << 24) & 0xff000000) | ((x >> 24) & 0xff) | ((x << 8) & 0xff0000) | ((x >> 8) & 0xff00);
+  // Tessellation already eliminated these cases.
+  assert(p0 != p1 && p0 != p2 && p1 != p2);
+  auto normal = (p1 - p0).cross(p2 - p0);
+  if (!normal.isZero(0)) normal.normalize();
+  return normal;
 }
 
-template <size_t N>
-void write_floats(std::ostream& output, const std::array<float, N>& data)
+constexpr size_t facetsPerChunk = 4096;
+constexpr size_t facetsPerBatch = 16 * facetsPerChunk;
+using BinaryFacet = std::array<char, 50>;
+
+BinaryFacet encode_binary_facet(const Vector3d& p0, const Vector3d& p1, const Vector3d& p2)
 {
+  static_assert(sizeof(float) == 4, "Need 32 bit float");
   static constexpr uint16_t test = 0x0001;
   static const bool isLittleEndian = *reinterpret_cast<const char *>(&test) == 1;
-
-  if (isLittleEndian) {
-    output.write(reinterpret_cast<char *>(const_cast<float *>(&data[0])), N * sizeof(float));
-  } else {
-    std::array<float, N> copy(data);
-
-    auto *ints = reinterpret_cast<int32_t *>(&copy[0]);
-    for (size_t i = 0; i < N; i++) {
-      ints[i] = flipEndianness(ints[i]);
+  const auto normal = facet_normal(p0, p1, p2);
+  std::array<float, 12> coords;
+  size_t offset = 0;
+  for (const auto *point : {&normal, &p0, &p1, &p2}) {
+    for (const auto value : {(*point)[0], (*point)[1], (*point)[2]}) coords[offset++] = value;
+  }
+  BinaryFacet facet{};
+  std::memcpy(facet.data(), coords.data(), coords.size() * sizeof(float));
+  if (!isLittleEndian) {
+    for (size_t i = 0; i < coords.size(); ++i) {
+      const auto first = facet.begin() + i * sizeof(float);
+      std::reverse(first, first + sizeof(float));
     }
+  }
+  return facet;
+}
 
-    output.write(reinterpret_cast<char *>(&copy[0]), N * sizeof(float));
+void append_binary_facets(const PolySet& ps, std::ostream& output)
+{
+  static_assert(sizeof(BinaryFacet) == 50, "STL facets are exactly 50 bytes");
+  const size_t total = ps.indices.size();
+  // For small exports, a single buffered write costs less than starting a team.
+  const size_t chunkSize = total >= 4 * facetsPerBatch ? facetsPerChunk : facetsPerBatch;
+  std::vector<BinaryFacet> buffer(std::min(facetsPerBatch, total));
+  for (size_t offset = 0; offset < total; offset += facetsPerBatch) {
+    const size_t count = std::min(facetsPerBatch, total - offset);
+    OpenSCADParallel::forEachChunk(count, chunkSize, [&](size_t first, size_t last) {
+      for (size_t i = first; i < last; ++i) {
+        const auto& face = ps.indices[offset + i];
+        buffer[i] = encode_binary_facet(ps.vertices[face[0]], ps.vertices[face[1]], ps.vertices[face[2]]);
+      }
+    });
+    output.write(reinterpret_cast<const char *>(buffer.data()), count * sizeof(BinaryFacet));
+  }
+}
+
+void append_ascii_facets(const PolySet& ps, std::ostream& output)
+{
+  std::vector<std::string> vertexStrings(ps.vertices.size());
+  OpenSCADParallel::forEachChunk(ps.vertices.size(), facetsPerChunk, [&](size_t first, size_t last) {
+    for (size_t i = first; i < last; ++i) vertexStrings[i] = toString(ps.vertices[i]);
+  });
+
+  std::array<std::string, facetsPerBatch / facetsPerChunk> buffers;
+  const size_t total = ps.indices.size();
+  for (size_t offset = 0; offset < total; offset += facetsPerBatch) {
+    const size_t count = std::min(facetsPerBatch, total - offset);
+    OpenSCADParallel::forEachChunk(count, facetsPerChunk, [&](size_t first, size_t last) {
+      auto& buffer = buffers[first / facetsPerChunk];
+      buffer.clear();
+      buffer.reserve(256 * (last - first));
+      for (size_t i = first; i < last; ++i) {
+        const auto& t = ps.indices[offset + i];
+        const auto normal = facet_normal(ps.vertices[t[0]], ps.vertices[t[1]], ps.vertices[t[2]]);
+        assert(vertexStrings[t[0]] != vertexStrings[t[1]] && vertexStrings[t[0]] != vertexStrings[t[2]] &&
+               vertexStrings[t[1]] != vertexStrings[t[2]]);
+        buffer += "  facet normal ";
+        buffer += toString(normal);
+        buffer += "\n    outer loop\n";
+        for (const auto index : {t[0], t[1], t[2]}) {
+          buffer += "      vertex ";
+          buffer += vertexStrings[index];
+          buffer += '\n';
+        }
+        buffer += "    endloop\n  endfacet\n";
+      }
+    });
+    for (size_t first = 0; first < count; first += facetsPerChunk) {
+      const auto& buffer = buffers[first / facetsPerChunk];
+      output.write(buffer.data(), buffer.size());
+    }
   }
 }
 
 uint64_t append_stl(const std::shared_ptr<const PolySet>& polyset, std::ostream& output, bool binary)
 {
-  static_assert(sizeof(float) == 4, "Need 32 bit float");
-
   std::shared_ptr<const PolySet> ps = polyset;
-  if (!ps->isTriangular()) {
-    ps = PolySetUtils::tessellate_faces(*ps);
-  }
+  if (!ps->isTriangular()) ps = PolySetUtils::tessellate_faces(*ps);
   ps = createSortedPolySet(*ps);
 
-  uint64_t triangle_count = 0;
+  if (binary) append_binary_facets(*ps, output);
+  else append_ascii_facets(*ps, output);
 
-  // In ASCII mode only, convert each vertex to string.
-  std::vector<std::string> vertexStrings;
-  if (!binary) {
-    vertexStrings.resize(ps->vertices.size());
-    std::transform(ps->vertices.begin(), ps->vertices.end(), vertexStrings.begin(),
-                   [](const auto& p) { return toString(p); });
-  }
-
-  // Used for binary mode only
-  std::array<float, 4lu * 3> coords;
-
-  for (const auto& t : ps->indices) {
-    const auto& p0 = ps->vertices[t[0]];
-    const auto& p1 = ps->vertices[t[1]];
-    const auto& p2 = ps->vertices[t[2]];
-
-    // Tessellation already eliminated these cases.
-    assert(p0 != p1 && p0 != p2 && p1 != p2);
-
-    auto normal = (p1 - p0).cross(p2 - p0);
-    if (!normal.isZero(0)) {
-      normal.normalize();
-    }
-
-    if (binary) {
-      auto coords_offset = 0;
-      auto addCoords = [&](const auto& v) {
-        for (auto i : {0, 1, 2}) coords[coords_offset++] = v[i];
-      };
-      addCoords(normal);
-      addCoords(p0);
-      addCoords(p1);
-      addCoords(p2);
-      assert(coords_offset == 4 * 3);
-      write_floats(output, coords);
-      char attrib[2] = {0, 0};
-      output.write(attrib, 2);
-    } else {
-      const auto& s0 = vertexStrings[t[0]];
-      const auto& s1 = vertexStrings[t[1]];
-      const auto& s2 = vertexStrings[t[2]];
-
-      // Since the points are different, the precision we use to
-      // format them to string should guarantee the strings are
-      // different too.
-      assert(s0 != s1 && s0 != s2 && s1 != s2);
-
-      output << "  facet normal ";
-      output << toString(normal) << "\n";
-      output << "    outer loop\n";
-      output << "      vertex " << s0 << "\n";
-      output << "      vertex " << s1 << "\n";
-      output << "      vertex " << s2 << "\n";
-      output << "    endloop\n";
-      output << "  endfacet\n";
-    }
-    triangle_count++;
-  }
-
-  return triangle_count;
+  return ps->indices.size();
 }
 
 #ifdef ENABLE_CGAL

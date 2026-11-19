@@ -15,6 +15,7 @@
 #include "geometry/PolySetBuilder.h"
 #include "geometry/Polygon2d.h"
 #include "geometry/linalg.h"
+#include "utils/parallel.h"
 #include "utils/printutils.h"
 #ifdef ENABLE_CGAL
 #include "geometry/cgal/cgalutils.h"
@@ -87,6 +88,7 @@ std::unique_ptr<PolySet> tessellate_faces(const PolySet& polyset)
   polygons.reserve(polyset.indices.size());
   std::vector<int32_t> polygon_color_indices;
   auto has_colors = !polyset.color_indices.empty();
+  size_t complexFaces = 0;
   if (has_colors) {
     assert(polyset.color_indices.size() == polyset.indices.size());
     polygon_color_indices.reserve(polyset.color_indices.size());
@@ -114,6 +116,7 @@ std::unique_ptr<PolySet> tessellate_faces(const PolySet& polyset)
     if (has_colors) {
       polygon_color_indices.push_back(polyset.color_indices[i]);
     }
+    complexFaces += currface.size() > 3;
     for (const auto& ind : currface) used[ind] = true;
   }
   // remove unreferenced vertices
@@ -134,29 +137,53 @@ std::unique_ptr<PolySet> tessellate_faces(const PolySet& polyset)
     }
   }
 
-  // we will reuse this memory instead of reallocating for each polygon
-  std::vector<IndexedTriangle> triangles;
-  std::vector<IndexedFace> facesBuffer(1);
-  for (size_t i = 0, n = polygons.size(); i < n; i++) {
-    const auto& face = polygons[i];
-    if (face.size() == 3) {
-      // trivial case - triangles cannot be concave or have holes
-      result->indices.push_back({face[0], face[1], face[2]});
-      if (has_colors) result->color_indices.push_back(polygon_color_indices[i]);
-    }
-    // Quads seem trivial, but can be concave, and can have degenerate cases.
-    // So everything more complex than triangles goes into the general case.
-    else {
+  auto tessellate = [&](size_t first, size_t last, PolygonIndices& indices,
+                        std::vector<int32_t>& colorIndices) {
+    std::vector<IndexedTriangle> triangles;
+    std::vector<IndexedFace> facesBuffer(1);
+    for (size_t i = first; i < last; ++i) {
+      const auto& face = polygons[i];
+      if (face.size() == 3) {
+        indices.push_back({face[0], face[1], face[2]});
+        if (has_colors) colorIndices.push_back(polygon_color_indices[i]);
+        continue;
+      }
+      // Quads can be concave or degenerate, so they also use the general triangulator.
       triangles.clear();
       facesBuffer[0] = face;
-      auto err = GeometryUtils::tessellatePolygonWithHoles(verts, facesBuffer, triangles, nullptr);
-      if (!err) {
+      if (!GeometryUtils::tessellatePolygonWithHoles(verts, facesBuffer, triangles, nullptr)) {
         for (const auto& t : triangles) {
-          result->indices.push_back({t[0], t[1], t[2]});
-          if (has_colors) result->color_indices.push_back(polygon_color_indices[i]);
+          indices.push_back({t[0], t[1], t[2]});
+          if (has_colors) colorIndices.push_back(polygon_color_indices[i]);
         }
       }
     }
+  };
+
+  const size_t chunkSize = 1024;
+  // Keep diagnostic output on the caller's thread, and merge tiles in input order.
+  if (complexFaces > chunkSize && OpenSCAD::debug.empty() && OpenSCADParallel::openMPEnabled()) {
+    struct TessellatedFaces {
+      PolygonIndices indices;
+      std::vector<int32_t> colorIndices;
+    };
+    std::vector<TessellatedFaces> chunks(1 + (polygons.size() - 1) / chunkSize);
+    OpenSCADParallel::forEachChunk(polygons.size(), chunkSize, [&](size_t first, size_t last) {
+      auto& chunk = chunks[first / chunkSize];
+      chunk.indices.reserve(last - first);
+      tessellate(first, last, chunk.indices, chunk.colorIndices);
+    });
+    size_t count = 0;
+    for (const auto& chunk : chunks) count += chunk.indices.size();
+    result->indices.reserve(count);
+    if (has_colors) result->color_indices.reserve(count);
+    for (const auto& chunk : chunks) {
+      result->indices.insert(result->indices.end(), chunk.indices.begin(), chunk.indices.end());
+      result->color_indices.insert(result->color_indices.end(), chunk.colorIndices.begin(),
+                                   chunk.colorIndices.end());
+    }
+  } else {
+    tessellate(0, polygons.size(), result->indices, result->color_indices);
   }
   if (degeneratePolygons > 0) {
     LOG(message_group::Warning, "PolySet has degenerate polygons");
