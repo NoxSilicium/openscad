@@ -182,6 +182,13 @@ After building dependencies using one of the following options, follow the instr
 
         ./scripts/macosx-build-homebrew.sh
 
+After compiling, run `bash scripts/macosx-package-2026.sh build` (replace
+`build` with your CMake build directory) to create `OpenSCAD 2026.app` beside
+the standard bundle. The package uses a light interface, the French message
+catalog, and a separate preferences profile. It includes lib3mf when linked
+and uses the other libraries from the build machine. The instructions for
+building on Linux, BSD, and Windows follow below.
+
 ### Building for Linux/BSD
 
 First, make sure that you have git installed (often packaged as 'git-core'

@@ -43,10 +43,15 @@
 #include <QtConcurrentRun>
 #include <QtGlobal>
 #include <array>
+#include <clocale>
 #include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
+
+#ifdef Q_OS_MACOS
+#include <CoreFoundation/CoreFoundation.h>
+#endif
 
 #include "Feature.h"
 #include "FontCache.h"
@@ -90,6 +95,19 @@ Q_DECLARE_METATYPE(std::shared_ptr<const Geometry>);
 extern std::string arg_colorscheme;
 
 namespace {
+
+#ifdef Q_OS_MACOS
+QString bundleString(CFStringRef key)
+{
+  if (const auto bundle = CFBundleGetMainBundle()) {
+    const auto value = CFBundleGetValueForInfoDictionaryKey(bundle, key);
+    if (value && CFGetTypeID(value) == CFStringGetTypeID()) {
+      return QString::fromCFString(static_cast<CFStringRef>(value));
+    }
+  }
+  return {};
+}
+#endif
 
 // Check if running with light or dark theme. This should really just be used
 // to switch the icon theme globally.
@@ -208,9 +226,14 @@ int gui(std::vector<std::string>& inputFiles, const std::filesystem::path& origi
   setGlobalTheme();
 
   // set up groups for QSettings
+  QString settingsName = QStringLiteral("OpenSCAD");
+#ifdef Q_OS_MACOS
+  const auto bundleSettingsName = bundleString(CFSTR("OpenSCADSettingsName"));
+  if (!bundleSettingsName.isEmpty()) settingsName = bundleSettingsName;
+#endif
   QCoreApplication::setOrganizationName("OpenSCAD");
   QCoreApplication::setOrganizationDomain("openscad.org");
-  QCoreApplication::setApplicationName("OpenSCAD");
+  QCoreApplication::setApplicationName(settingsName);
   QCoreApplication::setApplicationVersion(QString::fromStdString(std::string(openscad_versionnumber)));
   QGuiApplication::setApplicationDisplayName("OpenSCAD");
   QGuiApplication::setDesktopFileName(DESKTOP_FILENAME);
@@ -235,6 +258,16 @@ int gui(std::vector<std::string>& inputFiles, const std::filesystem::path& origi
   QSettingsCached settings;
   if (settings.value("advanced/localization", true).toBool()) {
     localization_init();
+#ifdef Q_OS_MACOS
+    const auto messageLocale = bundleString(CFSTR("OpenSCADMessageLocale")).toLatin1();
+    if (!messageLocale.isEmpty()) {
+      // gettext gives these environment overrides precedence over LC_MESSAGES.
+      qunsetenv("LC_ALL");
+      qunsetenv("LANGUAGE");
+      qputenv("LC_MESSAGES", messageLocale);
+      std::setlocale(LC_MESSAGES, messageLocale.constData());
+    }
+#endif
   }
   if (reset_window_settings) {
     const auto keys = std::array<std::string, 20>{
