@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <vector>
 
@@ -28,7 +29,9 @@ public:
   void appendPolySet(const PolySet& ps);
   void appendGeometry(const std::shared_ptr<const Geometry>& geom);
   void appendPolygon(const std::vector<int>& inds);
+  void appendPolygon(std::initializer_list<int> inds);
   void appendPolygon(const std::vector<Vector3d>& v);
+  void appendPolygon(std::initializer_list<Vector3d> polygon);
 
   void beginPolygon(int nvertices);
   void addVertex(int ind);

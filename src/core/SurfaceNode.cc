@@ -31,6 +31,7 @@
 #include <boost/assign/std/vector.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/tokenizer.hpp>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -256,10 +257,19 @@ std::unique_ptr<const Geometry> SurfaceNode::createGeometry() const
   double oy = center ? -(lines - 1) / 2.0 : 0;
 
   int num_indices = (lines - 1) * (columns - 1) * 4 + (lines - 1) * 2 + (columns - 1) * 2 + 1;
-  PolySetBuilder builder(0, num_indices);
+  PolySetBuilder builder(num_indices / 2, num_indices);
   builder.setConvexity(convexity);
   // the bulk of the heightmap
-  for (int i = 1; i < lines; ++i)
+  std::vector<int> previousRow(columns, -1);
+  std::vector<int> currentRow(columns, -1);
+  auto vertex = [&](int& index, double x, double y, double z) {
+    if (index >= 0) return index;
+    const int inserted = builder.vertexIndex(Vector3d(x, y, z));
+    // NaNs do not compare equal during vertex deduplication.
+    if (!std::isnan(z)) index = inserted;
+    return inserted;
+  };
+  for (int i = 1; i < lines; ++i) {
     for (int j = 1; j < columns; ++j) {
       double v1 = data[(j - 1) + (i - 1) * columns];
       double v2 = data[(j) + (i - 1) * columns];
@@ -268,18 +278,21 @@ std::unique_ptr<const Geometry> SurfaceNode::createGeometry() const
 
       double vx = (v1 + v2 + v3 + v4) / 4;
 
-      builder.appendPolygon({Vector3d(ox + j - 1, oy + i - 1, v1), Vector3d(ox + j, oy + i - 1, v2),
-                             Vector3d(ox + j - 0.5, oy + i - 0.5, vx)});
+      int centerIndex = -1;
+      auto cellCenter = [&]() { return vertex(centerIndex, ox + j - 0.5, oy + i - 0.5, vx); };
+      auto topLeft = [&]() { return vertex(previousRow[j - 1], ox + j - 1, oy + i - 1, v1); };
+      auto topRight = [&]() { return vertex(previousRow[j], ox + j, oy + i - 1, v2); };
+      auto bottomLeft = [&]() { return vertex(currentRow[j - 1], ox + j - 1, oy + i, v3); };
+      auto bottomRight = [&]() { return vertex(currentRow[j], ox + j, oy + i, v4); };
 
-      builder.appendPolygon({Vector3d(ox + j, oy + i - 1, v2), Vector3d(ox + j, oy + i, v4),
-                             Vector3d(ox + j - 0.5, oy + i - 0.5, vx)});
-
-      builder.appendPolygon({Vector3d(ox + j, oy + i, v4), Vector3d(ox + j - 1, oy + i, v3),
-                             Vector3d(ox + j - 0.5, oy + i - 0.5, vx)});
-
-      builder.appendPolygon({Vector3d(ox + j - 1, oy + i, v3), Vector3d(ox + j - 1, oy + i - 1, v1),
-                             Vector3d(ox + j - 0.5, oy + i - 0.5, vx)});
+      builder.appendPolygon({topLeft(), topRight(), cellCenter()});
+      builder.appendPolygon({topRight(), bottomRight(), cellCenter()});
+      builder.appendPolygon({bottomRight(), bottomLeft(), cellCenter()});
+      builder.appendPolygon({bottomLeft(), topLeft(), cellCenter()});
     }
+    previousRow.swap(currentRow);
+    std::fill(currentRow.begin(), currentRow.end(), -1);
+  }
 
   // edges along Y
   for (int i = 1; i < lines; ++i) {

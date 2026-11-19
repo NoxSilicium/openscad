@@ -43,7 +43,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
-#include <iterator>
+#include <initializer_list>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -129,10 +129,24 @@ void PolySetBuilder::appendPolygon(const std::vector<int>& inds)
   endPolygon();
 }
 
+void PolySetBuilder::appendPolygon(std::initializer_list<int> inds)
+{
+  beginPolygon(inds.size());
+  for (const auto index : inds) addVertex(index);
+  endPolygon();
+}
+
 void PolySetBuilder::appendPolygon(const std::vector<Vector3d>& polygon)
 {
   beginPolygon(polygon.size());
   for (const auto& v : polygon) addVertex(v);
+  endPolygon();
+}
+
+void PolySetBuilder::appendPolygon(std::initializer_list<Vector3d> polygon)
+{
+  beginPolygon(polygon.size());
+  for (const auto& vertex : polygon) addVertex(vertex);
   endPolygon();
 }
 
@@ -225,7 +239,7 @@ std::unique_ptr<PolySet> PolySetBuilder::build()
   endPolygon();
   std::unique_ptr<PolySet> polyset;
   polyset = std::make_unique<PolySet>(dim_, convex_);
-  vertices_.copy(std::back_inserter(polyset->vertices));
+  polyset->vertices = vertices_.takeArray();
   polyset->indices = std::move(indices_);
   polyset->color_indices = std::move(color_indices_);
   polyset->colors = std::move(colors_);
