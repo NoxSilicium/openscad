@@ -988,6 +988,7 @@ add_cmdline_test(export-binstl           OPENSCAD SUFFIX stl FILES ${EXPORT_STL_
 add_cmdline_test(export-binstl-stdout    OPENSCAD SUFFIX stl FILES ${EXPORT_STL_TEST_FILES} STDIO EXPECTEDDIR export-binstl ARGS --render --export-format binstl)
 
 add_cmdline_test(export-obj              OPENSCAD SUFFIX obj FILES ${EXPORT_OBJ_TEST_FILES})
+add_cmdline_test(export-obj              OPENSCAD SUFFIX obj FILES ${TEST_SCAD_DIR}/off/off-import-ndim.scad ARGS --hardwarnings)
 
 # linear_extrude(segments=...): the exported vertices show how each outline is subdivided.
 # The expected faces depend on how the caps are triangulated, which differs without Manifold.
@@ -1098,6 +1099,7 @@ add_cmdline_test(export-pdf-fill SCRIPT ${EXPORT_PNGTEST_PY} SUFFIX png FILES ${
 # Expected failing tests
 add_failing_test(stlfailedtest         SUFFIX stl  FILES ${TEST_SCAD_DIR}/misc/empty-union.scad ARGS --retval=1)
 add_failing_test(offfailedtest         SUFFIX off  FILES ${TEST_SCAD_DIR}/misc/empty-union.scad ARGS --retval=1)
+add_failing_test(offfailedtest         SUFFIX off  FILES ${TEST_SCAD_DIR}/off/off-import-non-finite.scad ARGS --retval=1)
 add_failing_test(parsererrors          SUFFIX stl  FILES ${FAILING_FILES} ARGS --retval=1)
 # Hardwarning Test
 add_failing_test(hardwarnings          SUFFIX echo FILES ${TEST_SCAD_DIR}/misc/errors-warnings.scad ARGS --retval=1 --hardwarnings)

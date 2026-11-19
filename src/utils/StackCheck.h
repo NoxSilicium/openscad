@@ -1,13 +1,12 @@
 #pragma once
 
-#include <cstdlib>
-
-#include "platform/PlatformUtils.h"
+#include <cstdint>
 
 #if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 26486)  // Disable warning for dangling pointers
-#endif                            // defined(_MSC_VER)
+#include <intrin.h>
+#endif
+
+#include "platform/PlatformUtils.h"
 
 class StackCheck
 {
@@ -18,23 +17,28 @@ public:
     return instance;
   }
 
-  inline bool check() { return size() >= limit; }
+  bool check() const
+  {
+    const auto address = stackAddress();
+    const auto used = address < origin ? origin - address : address - origin;
+    return used >= limit;
+  }
 
 private:
-  StackCheck() : limit(PlatformUtils::stackLimit())
+  StackCheck() : limit(PlatformUtils::stackLimit()), origin(stackAddress()) {}
+
+  static std::uintptr_t stackAddress()
   {
-    unsigned char c;
-    ptr = &c;  // NOLINT(*StackAddressEscape)
-  }
-  inline unsigned long size()
-  {
-    unsigned char c;
-    return std::abs(ptr - &c);
+#if defined(_MSC_VER)
+    return reinterpret_cast<std::uintptr_t>(_AddressOfReturnAddress());
+#elif defined(__GNUC__) && !defined(__EMSCRIPTEN__)
+    return reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0));
+#else
+    unsigned char marker;
+    return reinterpret_cast<std::uintptr_t>(&marker);
+#endif
   }
 
-  unsigned long limit;
-  unsigned char *ptr;
+  const unsigned long limit;
+  const std::uintptr_t origin;
 };
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif  // defined(_MSC_VER)

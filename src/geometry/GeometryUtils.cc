@@ -291,14 +291,14 @@ bool GeometryUtils::tessellatePolygonWithHoles(const std::vector<Vector3f>& vert
   }
 
   TESSalloc ma;
-  TESStesselator *tess = nullptr;
 
   memset(&ma, 0, sizeof(ma));
   ma.memalloc = stdAlloc;
   ma.memfree = stdFree;
   ma.extraVertices = 256;  // realloc not provided, allow 256 extra vertices.
 
-  if (!(tess = tessNewTess(&ma))) return true;
+  std::unique_ptr<TESStesselator, decltype(&tessDeleteTess)> tess(tessNewTess(&ma), tessDeleteTess);
+  if (!tess) return true;
 
   std::vector<TESSreal> contour;
   // Since libtess2's indices is based on the running number of points added, we need to map back
@@ -314,15 +314,15 @@ bool GeometryUtils::tessellatePolygonWithHoles(const std::vector<Vector3f>& vert
       allindices.push_back(idx);
     }
     assert(face.size() >= 3);
-    tessAddContour(tess, 3, &contour.front(), sizeof(TESSreal) * 3, face.size());
+    tessAddContour(tess.get(), 3, contour.data(), sizeof(TESSreal) * 3, face.size());
   }
 
-  if (!tessTesselate(tess, TESS_WINDING_ODD, TESS_CONSTRAINED_DELAUNAY_TRIANGLES, 3, 3, normalvec))
-    return false;
+  if (!tessTesselate(tess.get(), TESS_WINDING_ODD, TESS_CONSTRAINED_DELAUNAY_TRIANGLES, 3, 3, normalvec))
+    return true;
 
-  const auto vindices = tessGetVertexIndices(tess);
-  const auto elements = tessGetElements(tess);
-  auto numelems = tessGetElementCount(tess);
+  const auto vindices = tessGetVertexIndices(tess.get());
+  const auto elements = tessGetElements(tess.get());
+  auto numelems = tessGetElementCount(tess.get());
 
   /*
      At this point, we have a delaunay triangle mesh.
@@ -429,8 +429,6 @@ bool GeometryUtils::tessellatePolygonWithHoles(const std::vector<Vector3f>& vert
     }
   }
 #endif  // if 0
-
-  tessDeleteTess(tess);
 
   return false;
 }

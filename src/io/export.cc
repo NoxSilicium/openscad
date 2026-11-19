@@ -73,6 +73,8 @@
 
 namespace {
 
+struct NonFiniteMeshCoordinate {};
+
 struct Containers {
   std::unordered_map<std::string, FileFormatInfo> identifierToInfo;
   std::map<FileFormat, FileFormatInfo> fileFormatToInfo;
@@ -215,8 +217,8 @@ ExportInfo createExportInfo(const FileFormat& format, const FileFormatInfo& info
   return exportInfo;
 }
 
-void exportFile(const std::shared_ptr<const Geometry>& root_geom, std::ostream& output,
-                const ExportInfo& exportInfo)
+bool exportFile(const std::shared_ptr<const Geometry>& root_geom, std::ostream& output,
+                const ExportInfo& exportInfo) try
 {
   // Exported files always use '.' as the decimal point, whatever the global C++ locale is.
   const std::locale previous_locale = output.imbue(std::locale::classic());
@@ -239,6 +241,10 @@ void exportFile(const std::shared_ptr<const Geometry>& root_geom, std::ostream& 
 #endif
   default: assert(false && "Unknown file format");
   }
+  return true;
+} catch (const NonFiniteMeshCoordinate&) {
+  LOG(message_group::Error, _("Cannot export a mesh with non-finite vertex coordinates."));
+  return false;
 }
 
 bool exportFileStdOut(const std::shared_ptr<const Geometry>& root_geom, const ExportInfo& exportInfo)
@@ -250,7 +256,7 @@ bool exportFileStdOut(const std::shared_ptr<const Geometry>& root_geom, const Ex
     // lib3mf needs to seek in its output, which isn't possible when stdout is a pipe
     // (#6895), so build the file in memory first.
     std::stringstream buffer;
-    exportFile(root_geom, buffer, exportInfo);
+    if (!exportFile(root_geom, buffer, exportInfo)) return false;
     buffer.seekp(0, std::ios::end);
     if (buffer.tellp() <= 0) {
       // The exporter has already logged the reason
@@ -261,7 +267,7 @@ bool exportFileStdOut(const std::shared_ptr<const Geometry>& root_geom, const Ex
     std::cout << buffer.rdbuf();
   } else {
     errno = 0;
-    exportFile(root_geom, std::cout, exportInfo);
+    if (!exportFile(root_geom, std::cout, exportInfo)) return false;
   }
   std::cout.flush();
   if (!std::cout) {
@@ -287,10 +293,11 @@ bool exportFileByName(const std::shared_ptr<const Geometry>& root_geom, const st
     LOG(_("Can't open file \"%1$s\" for export"), filename);
     return false;
   } else {
+    bool exported = false;
     bool onerror = false;
     fstream.exceptions(std::ios::badbit | std::ios::failbit);
     try {
-      exportFile(root_geom, fstream, exportInfo);
+      exported = exportFile(root_geom, fstream, exportInfo);
     } catch (std::ios::failure&) {
       onerror = true;
     }
@@ -302,7 +309,7 @@ bool exportFileByName(const std::shared_ptr<const Geometry>& root_geom, const st
     if (onerror) {
       LOG(message_group::Error, _("\"%1$s\" write error. (Disk full?)"), filename);
     }
-    return !onerror;
+    return exported && !onerror;
   }
 }
 
@@ -365,13 +372,14 @@ std::unique_ptr<PolySet> createSortedPolySet(const PolySet& ps)
   std::vector<IndexedVertex> vertices;
   vertices.reserve(ps.vertices.size());
   std::vector<int> vertexIds(ps.vertices.size(), -1);
-  bool hasNaN = false;
   for (const auto& poly : ps.indices) {
     for (const auto idx : poly) {
       int& id = vertexIds[idx];
       if (id < 0) {
         const auto point = remove_negative_zero(ps.vertices[idx]);
-        hasNaN = hasNaN || std::isnan(point.x()) || std::isnan(point.y()) || std::isnan(point.z());
+        if (!std::isfinite(point.x()) || !std::isfinite(point.y()) || !std::isfinite(point.z())) {
+          throw NonFiniteMeshCoordinate{};
+        }
         vertices.push_back({point, idx});
         id = 0;
       }
@@ -379,39 +387,22 @@ std::unique_ptr<PolySet> createSortedPolySet(const PolySet& ps)
   }
 
   out->vertices.reserve(vertices.size());
-  if (hasNaN) {
-    // Preserve the legacy map ordering for non-numeric coordinates.
-    std::map<Vector3d, int, LexographicLess> vertexMap;
-    for (const auto& vertex : vertices) {
-      vertexIds[vertex.originalIndex] = vertexMap.emplace(vertex.point, vertexMap.size()).first->second;
-    }
-    std::vector<int> translated(vertexMap.size());
-    for (const auto& [point, index] : vertexMap) {
-      translated[index] = out->vertices.size();
-      out->vertices.push_back(point);
-    }
-    for (const auto& vertex : vertices) {
-      auto& id = vertexIds[vertex.originalIndex];
-      id = translated[id];
-    }
-  } else {
-    const auto less = [](const IndexedVertex& a, const IndexedVertex& b) {
-      return LexographicLess{}(a.point, b.point);
-    };
+  const auto less = [](const IndexedVertex& a, const IndexedVertex& b) {
+    return LexographicLess{}(a.point, b.point);
+  };
 #if ENABLE_TBB
-    if (vertices.size() >= 65536 && !std::getenv("OPENSCAD_NO_PARALLEL")) {
-      tbb::parallel_sort(vertices.begin(), vertices.end(), less);
-    } else
+  if (vertices.size() >= 65536 && !std::getenv("OPENSCAD_NO_PARALLEL")) {
+    tbb::parallel_sort(vertices.begin(), vertices.end(), less);
+  } else
 #endif
-    {
-      std::sort(vertices.begin(), vertices.end(), less);
+  {
+    std::sort(vertices.begin(), vertices.end(), less);
+  }
+  for (const auto& vertex : vertices) {
+    if (out->vertices.empty() || out->vertices.back() != vertex.point) {
+      out->vertices.push_back(vertex.point);
     }
-    for (const auto& vertex : vertices) {
-      if (out->vertices.empty() || out->vertices.back() != vertex.point) {
-        out->vertices.push_back(vertex.point);
-      }
-      vertexIds[vertex.originalIndex] = out->vertices.size() - 1;
-    }
+    vertexIds[vertex.originalIndex] = out->vertices.size() - 1;
   }
 
   out->indices.reserve(ps.indices.size());

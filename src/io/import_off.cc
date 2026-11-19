@@ -147,19 +147,20 @@ std::unique_ptr<PolySet> import_off(const std::string& filename, const Location&
     if (line.empty() && !getline_clean("bad header: end of file")) {
       return PolySet::createEmpty();
     }
-    splitLine();
-    if (f.eof() || words.empty()) {
+    std::string_view header(line);
+    const auto dimensionToken = takeAsciiToken(header, " \t");
+    if (f.eof() || dimensionToken.empty()) {
       AsciiError("bad header: missing Ndim");
       return PolySet::createEmpty();
     }
-    const std::string dimensionToken(words[0]);
-    line.erase(0, dimensionToken.size() + ((words.size() > 1) ? 1 : 0));
     try {
       dimension = parseOffNumber<unsigned int>(dimensionToken) + dimension - 3;
     } catch (const boost::bad_lexical_cast& blc) {
       AsciiError("bad header: bad data for Ndim");
       return PolySet::createEmpty();
     }
+    line.erase(0, line.size() - header.size());
+    boost::trim_left(line);
   }
 
   PRINTDB("Header flags: N:%d C:%d ST:%d Ndim:%d B:%d",
@@ -218,24 +219,9 @@ std::unique_ptr<PolySet> import_off(const std::string& filename, const Location&
     }
 
     try {
-      Vector3d v = {0, 0, 0};
-      size_t i;
-      for (i = 0; i < dimension; i++) {
-        v[i] = parseOffNumber<double>(words[i]);
-      }
-      // PRINTDB("Vertex[%ld] = { %f, %f, %f }", vertex % v[0] % v[1] % v[2]);
-      if (has_normals) {
-        ;  // TODO words[i++]
-        i += 0;
-      }
-      if (has_color) {
-        ;        // TODO: Meshlab appends color there, probably to allow gradients
-        i += 3;  // 4?
-      }
-      if (has_textures) {
-        ;  // TODO words[i++]
-      }
-      ps->vertices.push_back(v);
+      // Optional per-vertex attributes are currently ignored.
+      ps->vertices.emplace_back(parseOffNumber<double>(words[0]), parseOffNumber<double>(words[1]),
+                                parseOffNumber<double>(words[2]));
     } catch (const boost::bad_lexical_cast& blc) {
       AsciiError("can't parse vertex: bad data");
       return PolySet::createEmpty();

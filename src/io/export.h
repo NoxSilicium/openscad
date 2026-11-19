@@ -302,7 +302,7 @@ ExportInfo createExportInfo(const FileFormat& format, const FileFormatInfo& info
                             const std::string& filepath, const Camera *camera,
                             const CmdLineExportOptions& cmdLineOptions);
 
-void exportFile(const std::shared_ptr<const class Geometry>& root_geom, std::ostream& output,
+bool exportFile(const std::shared_ptr<const class Geometry>& root_geom, std::ostream& output,
                 const ExportInfo& exportInfo);
 bool exportFileByName(const std::shared_ptr<const class Geometry>& root_geom,
                       const std::string& filename, const ExportInfo& exportInfo);
