@@ -28,6 +28,7 @@
 
 #include <QBrush>
 #include <QColor>
+#include <QElapsedTimer>
 #include <QContextMenuEvent>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -92,7 +93,7 @@ void Console::addMessage(const Message& msg)
   // since anchor href is set via the "format" argument of:
   //    QTextCursor::insertText(const QString &text, const QTextCharFormat &format)
   // But if no link, and matching colors, then concat message strings with newline in between.
-  // This results in less calls to insertText in Console::update(), and much better performance.
+  // This reduces the number of calls to insertText when flushing the console.
 
   auto msgstr = QString::fromStdString(msg.str());
   auto color = QString::fromStdString(getGroupColor(msg.group));
@@ -102,9 +103,10 @@ void Console::addMessage(const Message& msg)
   const auto lastMessageNotInfo =
     bufferHasMessages && this->msgBuffer.back().group != message_group::HtmlLink;
   const auto sameColor = bufferHasMessages && color == this->msgBuffer.back().color;
+  constexpr int maxMergedLength = 16384;
 
   if (bufferHasMessages && messageHasNoLocation && lastMessageHasNoLink && lastMessageNotInfo &&
-      sameColor) {
+      sameColor && this->msgBuffer.back().message.size() + msgstr.size() < maxMergedLength) {
     auto& lastmsg = this->msgBuffer.back().message;
     lastmsg += QChar('\n');
     lastmsg += msgstr;
@@ -138,11 +140,21 @@ void Console::setConsoleFont(const QString& fontFamily, uint ptSize)
   this->setStyleSheet(stylesheet.arg(fontFamily, QString::number(ptSize)));
 }
 
-void Console::update()
+bool Console::flushMessages()
 {
-  // Faster to ignore block count until group of messages are done inserting.
+  if (msgBuffer.empty()) return false;
+
+  // Batch document notifications and cap the work before yielding to Qt.
+  QElapsedTimer elapsed;
+  elapsed.start();
+  int remainingBlocks = 256;
+  qsizetype characters = 0;
   this->setMaximumBlockCount(0);
-  for (const auto& line : this->msgBuffer) {
+  appendCursor.beginEditBlock();
+  do {
+    const auto line = std::move(msgBuffer.front());
+    msgBuffer.pop_front();
+    characters += line.message.size();
     if (line.group == message_group::HtmlLink) {
       addHtml(line.message);
     } else {
@@ -164,10 +176,11 @@ void Console::update()
       appendCursor.insertBlock();
       appendCursor.insertText(line.message, charFormat);
     }
-  }
-  msgBuffer.clear();
+  } while (!msgBuffer.empty() && --remainingBlocks > 0 && characters < 65536 && !elapsed.hasExpired(8));
+  appendCursor.endEditBlock();
   this->setTextCursor(appendCursor);
   this->setMaximumBlockCount(GlobalPreferences::inst()->getValue("advanced/consoleMaxLines").toUInt());
+  return !msgBuffer.empty();
 }
 
 void Console::on_actionClear_triggered()

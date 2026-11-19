@@ -31,8 +31,8 @@
 #include <QString>
 #include <QTextCursor>
 #include <QWidget>
+#include <deque>
 #include <utility>
-#include <vector>
 
 #include "gui/qtgettext.h"  // IWYU pragma: keep
 #include "ui_Console.h"
@@ -55,8 +55,7 @@ class Console : public QPlainTextEdit, public Ui::Console
   Q_OBJECT
 
 private:
-  static constexpr int MAX_LINES = 5000;
-  std::vector<ConsoleMessageBlock> msgBuffer;
+  std::deque<ConsoleMessageBlock> msgBuffer;
   QTextCursor appendCursor;  // keep a cursor always at the end of document.
 
 public:
@@ -85,6 +84,7 @@ public:
   void focusInEvent(QFocusEvent *event) override;
   void addMessage(const Message& msg);
   void addHtml(const QString& html);
+  bool flushMessages();
 
 signals:
   void linkActivated(QString);
@@ -97,5 +97,4 @@ public slots:
   void on_actionSaveAs_triggered();
   void hyperlinkClicked(const QString& loc);
   void setConsoleFont(const QString& fontFamily, uint ptSize);
-  void update();
 };

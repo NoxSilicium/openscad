@@ -1,9 +1,8 @@
 #pragma once
 
-#include <QHash>
 #include <QModelIndex>
-#include <QResizeEvent>
 #include <QStandardItemModel>
+#include <QTimer>
 #include <QWidget>
 #include <list>
 
@@ -24,24 +23,19 @@ public:
   ErrorLog& operator=(const ErrorLog& source) = delete;
   ErrorLog& operator=(ErrorLog&& source) = delete;
   ~ErrorLog() override = default;
-  void initGUI();
   void toErrorLog(const Message& logMsg);
-  void showtheErrorInGUI(const Message& logMsg);
   void clearModel();
-  int getLine(int row, int col);
-  QStandardItemModel *errorLogModel;
-  QHash<QString, bool> logsMap;
-  int row;
-
-protected:
-  void resizeEvent(QResizeEvent *event) override;
 
 private:
   void onIndexSelected(const QModelIndex& index);
-  void resize();
-
-private:
+  void appendRow(const Message& logMsg);
+  void scheduleRowResize();
+  void resizeNextRows();
+  void clearRows();
+  QStandardItemModel *errorLogModel;
   std::list<Message> lastMessages;
+  QTimer rowResizeTimer;
+  int nextRowToResize{0};
 
 signals:
   void openFile(const QString, int);
@@ -50,5 +44,4 @@ private slots:
   void on_logTable_doubleClicked(const QModelIndex& index);
   void on_errorLogComboBox_currentTextChanged(const QString& arg1);
   void on_actionRowSelected_triggered(bool);
-  void onSectionResized(int, int, int);
 };

@@ -81,6 +81,7 @@ public:
   Preferences *prefs;
 
   QTimer *consoleUpdater;
+  QElapsedTimer consoleEventThrottle;
 
   bool isPreview;
 

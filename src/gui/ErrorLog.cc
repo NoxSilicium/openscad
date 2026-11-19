@@ -2,8 +2,8 @@
 
 #include <QAbstractItemView>
 #include <QColor>
+#include <QElapsedTimer>
 #include <QList>
-#include <QResizeEvent>
 #include <QStandardItem>
 #include <QStandardItemModel>
 #include <QString>
@@ -15,17 +15,11 @@
 ErrorLog::ErrorLog(QWidget *parent) : QWidget(parent)
 {
   setupUi(this);
-  initGUI();
-}
-
-void ErrorLog::initGUI()
-{
-  row = 0;
   QList<QString> labels = QList<QString>()
                           << QString("Group") << QString("File") << QString("Line") << QString("Info");
 
   const int numColumns = labels.count();
-  this->errorLogModel = new QStandardItemModel(row, numColumns, logTable);
+  this->errorLogModel = new QStandardItemModel(0, numColumns, logTable);
 
   errorLogModel->setHorizontalHeaderLabels(labels);
   logTable->verticalHeader()->hide();
@@ -37,23 +31,22 @@ void ErrorLog::initGUI()
   logTable->addAction(actionRowSelected);
   // last column will stretch itself
 
-  connect(logTable->horizontalHeader(), &QHeaderView::sectionResized, this, &ErrorLog::onSectionResized);
+  rowResizeTimer.setSingleShot(true);
+  connect(&rowResizeTimer, &QTimer::timeout, this, &ErrorLog::resizeNextRows);
+  connect(logTable->horizontalHeader(), &QHeaderView::sectionResized, this, &ErrorLog::scheduleRowResize);
 }
 
 void ErrorLog::toErrorLog(const Message& logMsg)
 {
   lastMessages.push_back(logMsg);
-  QString currGroup = errorLogComboBox->currentText();
+  if (errorLogComboBox->currentIndex() != 0 &&
+      errorLogComboBox->currentText() != QString::fromStdString(getGroupName(logMsg.group))) return;
 
-  // handle combobox
-  if (errorLogComboBox->currentIndex() == 0)
-    ;
-  else if (currGroup.toStdString() != getGroupName(logMsg.group)) return;
-
-  showtheErrorInGUI(logMsg);
+  appendRow(logMsg);
+  logTable->resizeRowToContents(errorLogModel->rowCount() - 1);
 }
 
-void ErrorLog::showtheErrorInGUI(const Message& logMsg)
+void ErrorLog::appendRow(const Message& logMsg)
 {
   auto *groupName = new QStandardItem(QString::fromStdString(getGroupName(logMsg.group)));
   groupName->setEditable(false);
@@ -62,8 +55,6 @@ void ErrorLog::showtheErrorInGUI(const Message& logMsg)
     groupName->setForeground(QColor::fromRgb(255, 0, 0));  // make this item red.
   else if (logMsg.group == message_group::Warning)
     groupName->setForeground(QColor::fromRgb(252, 211, 3));  // make this item yellow
-
-  errorLogModel->setItem(row, errorLog_column::group, groupName);
 
   QStandardItem *fileName;
   QStandardItem *lineNo;
@@ -85,59 +76,59 @@ void ErrorLog::showtheErrorInGUI(const Message& logMsg)
   fileName->setEditable(false);
   lineNo->setEditable(false);
   lineNo->setTextAlignment(Qt::AlignVCenter | Qt::AlignRight);
-  errorLogModel->setItem(row, errorLog_column::file, fileName);
-  errorLogModel->setItem(row, errorLog_column::lineNo, lineNo);
-
   auto *msg = new QStandardItem(QString::fromStdString(logMsg.msg));
   msg->setEditable(false);
-  errorLogModel->setItem(row, errorLog_column::message, msg);
-  errorLogModel->setRowCount(++row);
-
-  this->resize();
+  errorLogModel->appendRow({groupName, fileName, lineNo, msg});
 
   if (!logTable->selectionModel()->hasSelection()) {
     logTable->selectRow(0);
   }
 }
 
-void ErrorLog::resize()
+void ErrorLog::scheduleRowResize()
 {
-  logTable->resizeRowsToContents();
+  nextRowToResize = 0;
+  if (errorLogModel->rowCount() > 0) rowResizeTimer.start(50);
 }
 
-void ErrorLog::onSectionResized(int /*logicalIndex*/, int /*oldSize*/, int /*newSize*/)
+void ErrorLog::resizeNextRows()
 {
-  this->resize();
-}
-
-void ErrorLog::resizeEvent(QResizeEvent *event)
-{
-  QWidget::resizeEvent(event);
-  this->resize();
+  // A column resize can invalidate every row's height. Reflow in short slices
+  // so the view can still handle input while a large log is being resized.
+  QElapsedTimer elapsed;
+  elapsed.start();
+  while (nextRowToResize < errorLogModel->rowCount()) {
+    logTable->resizeRowToContents(nextRowToResize++);
+    if (rowResizeTimer.isActive()) return;  // Column widths changed during reflow.
+    if (elapsed.hasExpired(8) && nextRowToResize < errorLogModel->rowCount()) {
+      rowResizeTimer.start(1);
+      return;
+    }
+  }
 }
 
 void ErrorLog::clearModel()
 {
-  errorLogModel->clear();
-  initGUI();
+  clearRows();
   lastMessages.clear();
 }
 
-int ErrorLog::getLine(int row, int col)
+void ErrorLog::clearRows()
 {
-  return logTable->model()->index(row, col).data().toInt();
+  rowResizeTimer.stop();
+  errorLogModel->removeRows(0, errorLogModel->rowCount());
 }
 
 void ErrorLog::on_errorLogComboBox_currentTextChanged(const QString& group)
 {
-  errorLogModel->clear();
-  initGUI();
-  for (auto& lastMessage : lastMessages) {
-    if (group == QString::fromStdString("All") ||
-        group == QString::fromStdString(getGroupName(lastMessage.group))) {
-      showtheErrorInGUI(lastMessage);
+  clearRows();
+  const bool showAll = errorLogComboBox->currentIndex() == 0;
+  for (const auto& lastMessage : lastMessages) {
+    if (showAll || group == QString::fromStdString(getGroupName(lastMessage.group))) {
+      appendRow(lastMessage);
     }
   }
+  scheduleRowResize();
 }
 
 void ErrorLog::on_logTable_doubleClicked(const QModelIndex& index)
@@ -157,7 +148,7 @@ void ErrorLog::onIndexSelected(const QModelIndex& index)
 {
   if (index.isValid()) {
     const int r = index.row();
-    const int line = getLine(r, errorLog_column::lineNo);
+    const int line = logTable->model()->index(r, errorLog_column::lineNo).data().toInt();
     const auto path = logTable->model()->index(r, errorLog_column::file).data(Qt::UserRole).toString();
     emit openFile(path, line - 1);
   }

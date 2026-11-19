@@ -3393,11 +3393,15 @@ void MainWindow::consoleOutput(const Message& msgObj)
   } else if (msgObj.group == message_group::Error) {
     ++this->compileErrors;
   }
-  // FIXME: scad parsing/evaluation should be done on separate thread so as not to block the gui.
-  // Then processEvents should no longer be needed here.
-  this->processEvents();
+  constexpr int consoleUpdateInterval = 50;
   if (consoleUpdater && !consoleUpdater->isActive()) {
-    consoleUpdater->start(50);  // Limit console updates to 20 FPS
+    consoleUpdater->start(consoleUpdateInterval);
+  }
+  // Evaluation currently runs on the GUI thread. Let it service GUI events
+  // periodically during a burst instead of dispatching events for every message.
+  if (procevents && (!consoleEventThrottle.isValid() || consoleEventThrottle.hasExpired(consoleUpdateInterval))) {
+    consoleEventThrottle.start();
+    this->processEvents();
   }
 }
 
@@ -3533,7 +3537,9 @@ void MainWindow::setupCoreSubsystems()
 
   consoleUpdater = new QTimer(this);
   consoleUpdater->setSingleShot(true);
-  connect(consoleUpdater, &QTimer::timeout, this->console, &Console::update);
+  connect(consoleUpdater, &QTimer::timeout, this, [this]() {
+    if (this->console->flushMessages()) consoleUpdater->start(1);
+  });
   this->consoleUpdater->start(0);  // Show initial messages immediately
 
   progressThrottle->start();
