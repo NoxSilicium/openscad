@@ -34,6 +34,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <set>
 #include <sstream>
@@ -866,14 +867,6 @@ LcFor::LcFor(AssignmentList args, Expression *expr, const Location& loc)
 {
 }
 
-static inline ContextHandle<Context> forContext(const std::shared_ptr<const Context>& context,
-                                                const std::string& name, Value value)
-{
-  ContextHandle<Context> innerContext{Context::create<Context>(context)};
-  innerContext->set_variable(name, std::move(value));
-  return innerContext;
-}
-
 static void doForEach(const AssignmentList& assignments, const Location& location,
                       const std::function<void(const std::shared_ptr<const Context>&)>& operation,
                       size_t assignment_index, const std::shared_ptr<const Context>& context,
@@ -887,6 +880,18 @@ static void doForEach(const AssignmentList& assignments, const Location& locatio
   const std::string& variable_name = assignments[assignment_index]->getName();
   Value variable_values = assignments[assignment_index]->getExpr()->evaluate(context);
 
+  std::optional<ContextHandle<Context>> iteration;
+  auto evaluateIteration = [&](Value value) {
+    // A closure can retain the previous binding. Reuse the frame only after all
+    // references created by that iteration have been released.
+    if (!iteration || iteration->hasOtherOwners()) {
+      iteration.reset();
+      iteration.emplace(Context::create<Context>(context));
+    }
+    (*iteration)->set_variable(variable_name, std::move(value));
+    doForEach(assignments, location, operation, assignment_index + 1, **iteration);
+  };
+
   if (variable_values.type() == Value::Type::RANGE) {
     const RangeType& range = variable_values.toRange();
     uint32_t steps = range.numValues();
@@ -897,41 +902,28 @@ static void doForEach(const AssignmentList& assignments, const Location& locatio
       if (pReserve) {
         (*pReserve)(steps);
       }
-      for (double value : range) {
-        doForEach(assignments, location, operation, assignment_index + 1,
-                  *forContext(context, variable_name, value));
-      }
+      for (double value : range) evaluateIteration(value);
     }
   } else if (variable_values.type() == Value::Type::VECTOR) {
     auto& vec = variable_values.toVector();
     if (pReserve) {
       (*pReserve)(vec.size());
     }
-    for (const auto& value : vec) {
-      doForEach(assignments, location, operation, assignment_index + 1,
-                *forContext(context, variable_name, value.clone()));
-    }
+    for (const auto& value : vec) evaluateIteration(value.clone());
   } else if (variable_values.type() == Value::Type::OBJECT) {
     auto& keys = variable_values.toObject().keys();
     if (pReserve) {
       (*pReserve)(keys.size());
     }
-    for (auto key : keys) {
-      doForEach(assignments, location, operation, assignment_index + 1,
-                *forContext(context, variable_name, key));
-    }
+    for (const auto& key : keys) evaluateIteration(key);
   } else if (variable_values.type() == Value::Type::STRING) {
     auto& wrapper = variable_values.toStrUtf8Wrapper();
     if (pReserve) {
       (*pReserve)(wrapper.size());
     }
-    for (auto value : wrapper) {
-      doForEach(assignments, location, operation, assignment_index + 1,
-                *forContext(context, variable_name, Value(std::move(value))));
-    }
+    for (auto value : wrapper) evaluateIteration(Value(std::move(value)));
   } else if (variable_values.type() != Value::Type::UNDEFINED) {
-    doForEach(assignments, location, operation, assignment_index + 1,
-              *forContext(context, variable_name, std::move(variable_values)));
+    evaluateIteration(std::move(variable_values));
   }
 }
 

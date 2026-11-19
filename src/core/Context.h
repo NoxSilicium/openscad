@@ -61,6 +61,7 @@ public:
   const T *operator->() const { return context.get(); }
   T *operator->() { return context.get(); }
   std::shared_ptr<const T> operator*() const { return context; }
+  [[nodiscard]] bool hasOtherOwners() const { return context.use_count() > 1; }
 
 private:
   std::shared_ptr<T> context;

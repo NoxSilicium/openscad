@@ -29,3 +29,4 @@ ECHO: fold1 = 45
 ECHO: fold2 = 100000
 ECHO: chaining = 0
 ECHO: scope_capture = 5
+ECHO: loop_closures = [100, 101, 110, 111, 120, 121]

@@ -65,10 +65,18 @@ Response NodeDumper::visit(State& state, const AbstractNode& node)
 
     if (this->idString) {
       static const boost::regex re(R"([^\s\"]+|\"(?:[^\"\\]|\\.)*\")");
-      const auto name = STR(node);
-      boost::sregex_token_iterator it(name.begin(), name.end(), re, 0);
-      std::copy(it, boost::sregex_token_iterator(),
-                std::ostream_iterator<std::string>(this->dumpstream));
+      auto name = STR(node);
+      if (std::none_of(name.begin(), name.end(), [](unsigned char ch) { return ch == '"' || ch >= 128; })) {
+        // Unquoted ASCII node parameters need only whitespace removal.
+        const auto end = std::remove_if(name.begin(), name.end(), [](char ch) {
+          return ch == ' ' || (ch >= '\t' && ch <= '\r');
+        });
+        this->dumpstream.write(name.data(), end - name.begin());
+      } else {
+        boost::sregex_token_iterator it(name.begin(), name.end(), re, 0);
+        std::copy(it, boost::sregex_token_iterator(),
+                  std::ostream_iterator<std::string>(this->dumpstream));
+      }
 
       if (node.getChildren().size() > 0) {
         this->dumpstream << "{";

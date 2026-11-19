@@ -86,3 +86,7 @@ echo(chaining = chaining1(500000));
 // function call scoping
 function scope_capture() = let(scope_capture = function() 5) scope_capture();
 echo(scope_capture = scope_capture());
+
+// Closures retain each iteration's bindings, including nested ranges.
+loop_closures = [for (i = [0:2], j = [0:1]) function(x) 10 * i + j + x];
+echo(loop_closures = [for (f = loop_closures) f(100)]);

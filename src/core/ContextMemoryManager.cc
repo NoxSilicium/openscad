@@ -28,8 +28,8 @@
 
 #include <cassert>
 #include <deque>
-#include <map>
 #include <memory>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -136,8 +136,9 @@ struct ReferencedContextVisitor {
 static std::vector<Context *> findRootContexts(
   const std::vector<std::shared_ptr<Context>>& managedContexts)
 {
-  std::map<ValueIdentifier, int> accountedValueReferences;
-  std::map<const Context *, int> accountedContextReferences;
+  std::unordered_map<ValueIdentifier, int> accountedValueReferences;
+  std::unordered_map<const Context *, int> accountedContextReferences;
+  accountedContextReferences.reserve(managedContexts.size());
   std::unordered_set<const Context *> fullyAccountedContexts;
 
   std::deque<const Value *> valueQueue;
@@ -149,9 +150,6 @@ static std::vector<Context *> findRootContexts(
       return;
     }
 
-    if (!accountedValueReferences.count(identifier)) {
-      accountedValueReferences[identifier] = 0;
-    }
     const int accountedReferences = ++accountedValueReferences[identifier];
     const int requiredReferences = std::visit(UseCountVisitor(), value.getVariant());
     assert(accountedReferences <= requiredReferences);
@@ -169,9 +167,6 @@ static std::vector<Context *> findRootContexts(
   };
 
   auto visitContext = [&](const std::shared_ptr<const Context>& context) {
-    if (!accountedContextReferences.count(context.get())) {
-      accountedContextReferences[context.get()] = 0;
-    }
     const int accountedReferences = ++accountedContextReferences[context.get()];
     const int requiredReferences = context.use_count();
     assert(accountedReferences <= requiredReferences);
@@ -232,14 +227,12 @@ static std::unordered_set<const Context *> findReachableContexts(
     if (!identifier) {
       return;
     }
-    if (!valuesSeen.count(identifier)) {
-      valuesSeen.insert(identifier);
+    if (valuesSeen.insert(identifier).second) {
       valueQueue.push_back(&value);
     }
   };
   auto visitContext = [&](const Context *context) {
-    if (!contextsSeen.count(context)) {
-      contextsSeen.insert(context);
+    if (contextsSeen.insert(context).second) {
       contextQueue.push_back(context);
     }
   };
