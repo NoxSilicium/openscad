@@ -30,6 +30,7 @@
 #include <cassert>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -46,6 +47,11 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+#if ENABLE_TBB
+#include <cstdlib>
+#include <tbb/parallel_sort.h>
+#endif
 
 #ifdef _WIN32
 #include <fcntl.h>
@@ -352,36 +358,71 @@ std::unique_ptr<PolySet> createSortedPolySet(const PolySet& ps)
   out->setTriangular(ps.isTriangular());
   out->setConvexity(ps.getConvexity());
 
-  std::map<Vector3d, int, LexographicLess> vertexMap;
-
+  struct IndexedVertex {
+    Vector3d point;
+    int originalIndex;
+  };
+  std::vector<IndexedVertex> vertices;
+  vertices.reserve(ps.vertices.size());
   std::vector<int> vertexIds(ps.vertices.size(), -1);
-  out->indices.reserve(ps.indices.size());
+  bool hasNaN = false;
   for (const auto& poly : ps.indices) {
-    auto& face = out->indices.emplace_back();
-    face.reserve(poly.size());
     for (const auto idx : poly) {
       int& id = vertexIds[idx];
       if (id < 0) {
-        id = vertexMap.emplace(remove_negative_zero(ps.vertices[idx]), vertexMap.size()).first->second;
+        const auto point = remove_negative_zero(ps.vertices[idx]);
+        hasNaN = hasNaN || std::isnan(point.x()) || std::isnan(point.y()) || std::isnan(point.z());
+        vertices.push_back({point, idx});
+        id = 0;
       }
-      face.push_back(id);
     }
+  }
+
+  out->vertices.reserve(vertices.size());
+  if (hasNaN) {
+    // Preserve the legacy map ordering for non-numeric coordinates.
+    std::map<Vector3d, int, LexographicLess> vertexMap;
+    for (const auto& vertex : vertices) {
+      vertexIds[vertex.originalIndex] = vertexMap.emplace(vertex.point, vertexMap.size()).first->second;
+    }
+    std::vector<int> translated(vertexMap.size());
+    for (const auto& [point, index] : vertexMap) {
+      translated[index] = out->vertices.size();
+      out->vertices.push_back(point);
+    }
+    for (const auto& vertex : vertices) {
+      auto& id = vertexIds[vertex.originalIndex];
+      id = translated[id];
+    }
+  } else {
+    const auto less = [](const IndexedVertex& a, const IndexedVertex& b) {
+      return LexographicLess{}(a.point, b.point);
+    };
+#if ENABLE_TBB
+    if (vertices.size() >= 65536 && !std::getenv("OPENSCAD_NO_PARALLEL")) {
+      tbb::parallel_sort(vertices.begin(), vertices.end(), less);
+    } else
+#endif
+    {
+      std::sort(vertices.begin(), vertices.end(), less);
+    }
+    for (const auto& vertex : vertices) {
+      if (out->vertices.empty() || out->vertices.back() != vertex.point) {
+        out->vertices.push_back(vertex.point);
+      }
+      vertexIds[vertex.originalIndex] = out->vertices.size() - 1;
+    }
+  }
+
+  out->indices.reserve(ps.indices.size());
+  for (const auto& face : ps.indices) {
+    auto& poly = out->indices.emplace_back();
+    poly.reserve(face.size());
+    for (const auto idx : face) poly.push_back(vertexIds[idx]);
+    std::rotate(poly.begin(), std::min_element(poly.begin(), poly.end()), poly.end());
   }
   out->color_indices = ps.color_indices;
   out->colors = ps.colors;
-
-  std::vector<int> indexTranslationMap(vertexMap.size());
-  out->vertices.reserve(vertexMap.size());
-
-  for (const auto& [v, i] : vertexMap) {
-    indexTranslationMap[i] = out->vertices.size();
-    out->vertices.push_back(v);
-  }
-
-  for (auto& poly : out->indices) {
-    for (auto& idx : poly) idx = indexTranslationMap[idx];
-    std::rotate(poly.begin(), std::min_element(poly.begin(), poly.end()), poly.end());
-  }
   if (ps.color_indices.empty()) {
     std::sort(out->indices.begin(), out->indices.end());
   } else {

@@ -1,7 +1,6 @@
 #include "io/import.h"
 
 #include <boost/algorithm/string.hpp>
-#include <boost/algorithm/string/split.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/regex.hpp>
 #include <charconv>
@@ -12,15 +11,16 @@
 #include <fstream>
 #include <ios>
 #include <locale>
-#include <map>
 #include <memory>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "core/AST.h"
 #include "geometry/PolySet.h"
 #include "geometry/linalg.h"
+#include "io/ascii_tokens.h"
 #include "utils/printutils.h"
 
 // Set limit for reserving vector sizes. Using 10⁸ should be
@@ -30,6 +30,14 @@
 constexpr unsigned long max_reserve_vertices = 10'000'000;
 constexpr unsigned long max_reserve_faces = 10'000'000;
 
+namespace {
+template <typename Number>
+Number parseOffNumber(std::string_view token)
+{
+  return boost::lexical_cast<Number>(token.data(), token.size());
+}
+}  // namespace
+
 // References:
 // http://www.geomview.org/docs/html/OFF.html
 
@@ -37,8 +45,6 @@ std::unique_ptr<PolySet> import_off(const std::string& filename, const Location&
 {
   const boost::regex ex_magic(R"(^(ST)?(C)?(N)?(4)?(n)?OFF( BINARY)? *)");
   // XXX: are ST C N always in order?
-  const boost::regex ex_cr(R"(\r$)");
-  const boost::regex ex_comment(R"(\s*#.*$)");
   boost::smatch results;
 
   std::ifstream f(std::filesystem::u8path(filename), std::ios::in | std::ios::binary);
@@ -59,23 +65,17 @@ std::unique_ptr<PolySet> import_off(const std::string& filename, const Location&
         AsciiError(errstr);
         return false;
       }
-      // strip DOS line endings
-      if (boost::regex_search(line, results, ex_cr)) {
-        line = line.erase(results.position(), results[0].length());
-      }
-      // strip comments
-      if (boost::regex_search(line, results, ex_comment)) {
-        line = line.erase(results.position(), results[0].length());
-      }
+      const auto comment = line.find('#');
+      if (comment != std::string::npos) line.erase(comment);
       boost::trim(line);
     } while (line.empty());
 
     return true;
   };
 
-  auto getcolor = [&](const auto& word) {
+  auto getcolor = [&](std::string_view word) {
     int c;
-    if (boost::contains(word, ".")) {
+    if (word.find('.') != std::string_view::npos) {
       float f;
 #ifdef __cpp_lib_to_chars
       auto result = std::from_chars(word.data(), word.data() + word.length(), f);
@@ -85,7 +85,7 @@ std::unique_ptr<PolySet> import_off(const std::string& filename, const Location&
       }
 #else
       // fall back for pre C++17
-      std::istringstream istr(word);
+      std::istringstream istr{std::string(word)};
       istr.imbue(std::locale("C"));
       istr >> f;
       if (istr.peek() != EOF) {
@@ -95,7 +95,7 @@ std::unique_ptr<PolySet> import_off(const std::string& filename, const Location&
 #endif
       c = (int)(f * 255);
     } else {
-      c = boost::lexical_cast<int>(word);
+      c = parseOffNumber<int>(word);
     }
     return c;
   };
@@ -134,20 +134,28 @@ std::unique_ptr<PolySet> import_off(const std::string& filename, const Location&
     return PolySet::createEmpty();
   }
 
-  std::vector<std::string> words;
+  std::vector<std::string_view> words;
+  auto splitLine = [&]() {
+    words.clear();
+    std::string_view text(line);
+    for (auto word = takeAsciiToken(text, " \t"); !word.empty(); word = takeAsciiToken(text, " \t")) {
+      words.push_back(word);
+    }
+  };
 
   if (has_ndim) {
     if (line.empty() && !getline_clean("bad header: end of file")) {
       return PolySet::createEmpty();
     }
-    boost::split(words, line, boost::is_any_of(" \t"), boost::token_compress_on);
-    if (f.eof() || words.size() < 1) {
+    splitLine();
+    if (f.eof() || words.empty()) {
       AsciiError("bad header: missing Ndim");
       return PolySet::createEmpty();
     }
-    line = line.erase(0, words[0].length() + ((words.size() > 1) ? 1 : 0));
+    const std::string dimensionToken(words[0]);
+    line.erase(0, dimensionToken.size() + ((words.size() > 1) ? 1 : 0));
     try {
-      dimension = boost::lexical_cast<unsigned int>(words[0]) + dimension - 3;
+      dimension = parseOffNumber<unsigned int>(dimensionToken) + dimension - 3;
     } catch (const boost::bad_lexical_cast& blc) {
       AsciiError("bad header: bad data for Ndim");
       return PolySet::createEmpty();
@@ -166,7 +174,7 @@ std::unique_ptr<PolySet> import_off(const std::string& filename, const Location&
     return PolySet::createEmpty();
   }
 
-  boost::split(words, line, boost::is_any_of(" \t"), boost::token_compress_on);
+  splitLine();
   if (f.eof() || words.size() < 3) {
     AsciiError("bad header: missing data");
     return PolySet::createEmpty();
@@ -178,9 +186,9 @@ std::unique_ptr<PolySet> import_off(const std::string& filename, const Location&
   unsigned long vertex = 0;
   unsigned long face = 0;
   try {
-    vertices_count = boost::lexical_cast<unsigned long>(words[0]);
-    faces_count = boost::lexical_cast<unsigned long>(words[1]);
-    edges_count = boost::lexical_cast<unsigned long>(words[2]);
+    vertices_count = parseOffNumber<unsigned long>(words[0]);
+    faces_count = parseOffNumber<unsigned long>(words[1]);
+    edges_count = parseOffNumber<unsigned long>(words[2]);
     (void)edges_count;  // ignored
   } catch (const boost::bad_lexical_cast& blc) {
     AsciiError("bad header: bad data");
@@ -203,7 +211,7 @@ std::unique_ptr<PolySet> import_off(const std::string& filename, const Location&
       return PolySet::createEmpty();
     }
 
-    boost::split(words, line, boost::is_any_of(" \t"), boost::token_compress_on);
+    splitLine();
     if (words.size() < 3) {
       AsciiError("can't parse vertex: not enough data");
       return PolySet::createEmpty();
@@ -213,7 +221,7 @@ std::unique_ptr<PolySet> import_off(const std::string& filename, const Location&
       Vector3d v = {0, 0, 0};
       size_t i;
       for (i = 0; i < dimension; i++) {
-        v[i] = boost::lexical_cast<double>(words[i]);
+        v[i] = parseOffNumber<double>(words[i]);
       }
       // PRINTDB("Vertex[%ld] = { %f, %f, %f }", vertex % v[0] % v[1] % v[2]);
       if (has_normals) {
@@ -239,15 +247,14 @@ std::unique_ptr<PolySet> import_off(const std::string& filename, const Location&
       return PolySet::createEmpty();
     }
 
-    boost::split(words, line, boost::is_any_of(" \t"), boost::token_compress_on);
-    if (words.size() < 1) {
+    splitLine();
+    if (words.empty()) {
       AsciiError("can't parse face: not enough data");
       return PolySet::createEmpty();
     }
 
-    std::map<Color4f, int32_t> color_indices;
     try {
-      const auto face_size = boost::lexical_cast<unsigned long>(words[0]);
+      const auto face_size = parseOffNumber<unsigned long>(words[0]);
       unsigned long i;
       if (words.size() - 1 < face_size) {
         AsciiError("can't parse face: missing indices");
@@ -257,7 +264,7 @@ std::unique_ptr<PolySet> import_off(const std::string& filename, const Location&
       ps->indices.emplace_back().reserve(face_size);
       // PRINTDB("Index[%d] [%d] = { ", face % n);
       for (i = 0; i < face_size; i++) {
-        size_t ind = boost::lexical_cast<int>(words[i + 1]);
+        const size_t ind = parseOffNumber<int>(words[i + 1]);
         // PRINTDB("%d, ", ind);
         if (ind >= 0 && ind < ps->vertices.size()) {
           ps->indices.back().push_back(ind);
@@ -273,12 +280,9 @@ std::unique_ptr<PolySet> import_off(const std::string& filename, const Location&
         const int g = getcolor(words[i++]);
         const int b = getcolor(words[i++]);
         const int a = i < words.size() ? getcolor(words[i++]) : 255;
-        const Color4f color(r, g, b, a);
-
-        auto iter_pair = color_indices.insert_or_assign(color, ps->colors.size());
-        if (iter_pair.second) ps->colors.push_back(color);  // inserted
         ps->color_indices.resize(face_idx, -1);
-        ps->color_indices.push_back(iter_pair.first->second);
+        ps->color_indices.push_back(ps->colors.size());
+        ps->colors.emplace_back(r, g, b, a);
       }
     } catch (const boost::bad_lexical_cast& blc) {
       AsciiError("can't parse face: bad data");
