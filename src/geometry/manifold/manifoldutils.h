@@ -13,7 +13,7 @@ namespace ManifoldUtils {
 
 const char *statusToString(manifold::Manifold::Error status);
 
-std::shared_ptr<ManifoldGeometry> createManifoldFromPolySet(const PolySet& ps);
+std::shared_ptr<ManifoldGeometry> createManifoldFromPolySet(const PolySet& ps, bool allowRepair = true);
 std::shared_ptr<const ManifoldGeometry> createManifoldFromGeometry(
   const std::shared_ptr<const Geometry>& geom);
 

@@ -123,8 +123,9 @@ std::shared_ptr<CSGNode> CSGOperation::createCSGNode(OpenSCADOperator type,
 }
 
 CSGLeaf::CSGLeaf(const std::shared_ptr<const PolySet>& ps, Transform3d matrix, Color4f color,
-                 std::string label, const int index)
-  : label(std::move(label)), matrix(std::move(matrix)), color(std::move(color)), index(index)
+                 std::string label, const int index, bool axisAlignedBox)
+  : label(std::move(label)), matrix(std::move(matrix)), color(std::move(color)), index(index),
+    axisAlignedBox(axisAlignedBox)
 {
   if (ps && !ps->isEmpty()) this->polyset = ps;
   CSGLeaf::initBoundingBox();

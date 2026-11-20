@@ -33,7 +33,8 @@ using Error = manifold::Manifold::Error;
 
 namespace {
 
-std::shared_ptr<ManifoldGeometry> createManifoldFromTriangularPolySet(const PolySet& ps)
+std::shared_ptr<ManifoldGeometry> createManifoldFromTriangularPolySet(const PolySet& ps,
+                                                                    bool allowRepair)
 {
   assert(ps.isTriangular());
 
@@ -103,6 +104,7 @@ std::shared_ptr<ManifoldGeometry> createManifoldFromTriangularPolySet(const Poly
   // has negative volume and booleans with it give wrong results (#7201). Flip it,
   // like the CGAL backend does.
   if (mani.Status() == Error::NoError && mani.Volume() < 0) {
+    if (!allowRepair) return nullptr;
     for (size_t i = 0; i + 2 < mesh.triVerts.size(); i += 3) {
       std::swap(mesh.triVerts[i + 1], mesh.triVerts[i + 2]);
     }
@@ -136,7 +138,7 @@ const char *statusToString(Error status)
   }
 }
 
-std::shared_ptr<ManifoldGeometry> createManifoldFromPolySet(const PolySet& ps)
+std::shared_ptr<ManifoldGeometry> createManifoldFromPolySet(const PolySet& ps, bool allowRepair)
 {
   // 1. If the PolySet is already manifold, we should be able to build a Manifold object directly
   // (through using manifold::Mesh).
@@ -145,15 +147,17 @@ std::shared_ptr<ManifoldGeometry> createManifoldFromPolySet(const PolySet& ps)
   // so we just try converting to a Manifold object and check its status.
   std::unique_ptr<const PolySet> triangulated;
   if (!ps.isTriangular()) {
-    triangulated = PolySetUtils::tessellate_faces(ps);
+    triangulated = PolySetUtils::tessellate_faces(ps, allowRepair);
   }
   const PolySet& triangle_set = ps.isTriangular() ? ps : *triangulated;
 
   // Note: This function also performs a merge if the first attempt fails.
-  auto mani = createManifoldFromTriangularPolySet(triangle_set);
+  auto mani = createManifoldFromTriangularPolySet(triangle_set, allowRepair);
+  if (!mani) return nullptr;
   if (mani->getManifold().Status() == Error::NoError) {
     return mani;
   }
+  if (!allowRepair) return nullptr;
 
   LOG(message_group::Warning,
       "PolySet -> Manifold conversion failed: %1$s\n"

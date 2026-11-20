@@ -89,7 +89,7 @@ class CSGLeaf : public CSGNode
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   CSGLeaf(const std::shared_ptr<const PolySet>& ps, Transform3d matrix, Color4f color, std::string label,
-          const int index);
+          const int index, bool axisAlignedBox = false);
   void initBoundingBox() override;
   [[nodiscard]] bool isEmptySet() const override;
   [[nodiscard]] std::string dump() const override;
@@ -99,6 +99,8 @@ public:
   Color4f color;
 
   const int index;
+  // The source geometry is a solid box in its own coordinates.
+  const bool axisAlignedBox;
 
   friend class CSGProducts;
 };

@@ -1321,6 +1321,7 @@ else()
     src/glview/OffscreenView.cc
     src/glview/PolySetRenderer.cc
     src/glview/preview/OpenCSGRenderer.cc
+    src/glview/preview/PreviewMeshCache.cc
     src/glview/preview/ThrownTogetherRenderer.cc
     src/io/export_png.cc
     src/io/imageutils.cc

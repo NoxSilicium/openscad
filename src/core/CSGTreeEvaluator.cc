@@ -19,6 +19,7 @@
 #include "core/TransformNode.h"
 #include "core/enums.h"
 #include "core/node.h"
+#include "core/primitives.h"
 #include "geometry/Geometry.h"
 #include "geometry/GeometryEvaluator.h"
 #include "geometry/PolySet.h"
@@ -234,8 +235,9 @@ std::shared_ptr<CSGNode> CSGTreeEvaluator::evaluateCSGNodeFromGeometry(
     }
   }
 
-  std::shared_ptr<CSGNode> t(
-    new CSGLeaf(ps, state.matrix(), state.color(), STR(node.name(), node.index()), node.index()));
+  auto t = std::make_shared<CSGLeaf>(ps, state.matrix(), state.color(),
+                                     STR(node.name(), node.index()), node.index(),
+                                     dynamic_cast<const CubeNode *>(&node) != nullptr);
   if (modinst->isHighlight() || state.isHighlight()) t->setHighlight(true);
   if (modinst->isBackground() || state.isBackground()) t->setBackground(true);
   return t;

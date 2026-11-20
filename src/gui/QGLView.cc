@@ -69,6 +69,11 @@
 #ifdef ENABLE_OPENCSG
 #include <opencsg.h>
 #endif
+#if defined(ENABLE_OPENCSG) && defined(ENABLE_MANIFOLD)
+#include <QFutureWatcher>
+#include <QtConcurrentRun>
+#include "glview/preview/OpenCSGRenderer.h"
+#endif
 
 #include "gui/qt-obsolete.h"
 #include "gui/Measurement.h"
@@ -217,6 +222,10 @@ void QGLView::paintGL()
 {
   GLView::paintGL();
 
+#if defined(ENABLE_OPENCSG) && defined(ENABLE_MANIFOLD)
+  startPreviewMeshJob();
+#endif
+
   if (statusLabel) {
     auto status = QString("%1 (%2x%3)")
                     .arg(QString::fromStdString(cam.statusText()))
@@ -225,6 +234,31 @@ void QGLView::paintGL()
     statusLabel->setText(status);
   }
 }
+
+#if defined(ENABLE_OPENCSG) && defined(ENABLE_MANIFOLD)
+void QGLView::startPreviewMeshJob()
+{
+  if (previewMeshBusy || showEdges()) return;
+  auto preview = std::dynamic_pointer_cast<OpenCSGRenderer>(renderer);
+  if (!preview) return;
+  auto job = preview->previewMeshJob();
+  if (!job) return;
+
+  previewMeshBusy = true;
+  auto *watcher = new QFutureWatcher<std::shared_ptr<CSGProducts>>(this);
+  connect(watcher, &QFutureWatcherBase::finished, this,
+          [this, watcher, original = std::weak_ptr<OpenCSGRenderer>(preview)] {
+    previewMeshBusy = false;
+    const auto source = original.lock();
+    auto products = watcher->result();
+    const bool ready = source && products;
+    if (ready) source->installPreviewMesh(std::move(products));
+    watcher->deleteLater();
+    if (ready || renderer != source) update();
+  });
+  watcher->setFuture(QtConcurrent::run(std::move(job)));
+}
+#endif
 
 void QGLView::mousePressEvent(QMouseEvent *event)
 {

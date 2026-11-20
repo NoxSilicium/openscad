@@ -103,6 +103,10 @@ private:
   void resizeGL(int w, int h) override;
 
   void paintGL() override;
+#if defined(ENABLE_OPENCSG) && defined(ENABLE_MANIFOLD)
+  void startPreviewMeshJob();
+  bool previewMeshBusy = false;
+#endif
   void normalizeAngle(GLdouble& angle);
 
 #ifdef ENABLE_OPENCSG

@@ -15,6 +15,7 @@
 #include "glview/VBORenderer.h"
 
 #include <cstddef>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -70,6 +71,8 @@ public:
 
   [[nodiscard]] const std::vector<OpenCSG::Primitive *>& primitives() const { return primitives_; }
 
+  bool opaque = true;
+
 private:
   // primitives_ is used to create the OpenCSG depth buffer (unlit rendering).
   // states_ is used for color rendering (using GL_EQUAL).
@@ -90,13 +93,26 @@ public:
 
   BoundingBox getBoundingBox() const override;
 
+#ifdef ENABLE_MANIFOLD
+  std::function<std::shared_ptr<CSGProducts>()> previewMeshJob();
+  void installPreviewMesh(std::shared_ptr<CSGProducts> products);
+#endif
+
 private:
   void createCSGVBOProducts(const CSGProducts& products, bool highlight_mode, bool background_mode,
                             const ShaderUtils::ShaderInfo *shaderinfo);
 
   std::vector<std::unique_ptr<OpenCSGVBOProduct>> vertex_state_containers_;
+  size_t occlusionCandidates_ = 0;
+  bool prepared_ = false;
+  bool skippedFirstProduct_ = false;
   std::shared_ptr<CSGProducts> root_products_;
   std::shared_ptr<CSGProducts> highlights_products_;
   std::shared_ptr<CSGProducts> background_products_;
   std::string opencsg_vertex_shader_code_;
+#ifdef ENABLE_MANIFOLD
+  std::unique_ptr<OpenCSGRenderer> cachedRenderer_;
+  std::shared_ptr<void> previewMeshLifetime_;
+  const ColorScheme *previewMeshColorScheme_ = nullptr;
+#endif
 };

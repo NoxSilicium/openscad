@@ -64,7 +64,7 @@ std::unique_ptr<Polygon2d> project(const PolySet& ps)
    polyset has simple polygon faces with no holes.
    The tessellation will be robust wrt. degenerate and self-intersecting
  */
-std::unique_ptr<PolySet> tessellate_faces(const PolySet& polyset)
+std::unique_ptr<PolySet> tessellate_faces(const PolySet& polyset, bool reportDegenerate)
 {
   int degeneratePolygons = 0;
   auto result = std::make_unique<PolySet>(3, polyset.convexValue());
@@ -185,7 +185,7 @@ std::unique_ptr<PolySet> tessellate_faces(const PolySet& polyset)
   } else {
     tessellate(0, polygons.size(), result->indices, result->color_indices);
   }
-  if (degeneratePolygons > 0) {
+  if (reportDegenerate && degeneratePolygons > 0) {
     LOG(message_group::Warning, "PolySet has degenerate polygons");
   }
   return result;
