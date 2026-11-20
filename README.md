@@ -5,8 +5,10 @@
 [![Visit our IRC channel](https://kiwiirc.com/buttons/irc.libera.chat/openscad.png)](https://kiwiirc.com/client/irc.libera.chat/#openscad)
 
 # What is OpenSCAD?
-OpenSCAD 2026 is a customized build of OpenSCAD. English is the working
-language of this repository.
+OpenSCAD 2026 is a performance-focused fork of [OpenSCAD](https://github.com/openscad/openscad).
+The Git history preserves the work of the OpenSCAD developers and contributors.
+See [COPYING](COPYING) for the original license and its CGAL exception.
+English is the working language of this repository.
 
 <p><a href="https://opencollective.com/openscad/donate"><img align="right" src="https://opencollective.com/openscad/donate/button@2x.png?color=white" width="200"/></a>
 
@@ -141,7 +143,7 @@ For the test suite, additional requirements are:
 
 Install git (https://git-scm.com/) onto your system. Then run a clone:
 
-    git clone https://github.com/openscad/openscad.git
+    git clone https://github.com/NoxSilicium/openscad.git
 
 This will download the latest sources into a directory named `openscad`.
 
