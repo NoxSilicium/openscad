@@ -8,7 +8,6 @@
 OpenSCAD 2026 is a performance-focused fork of [OpenSCAD](https://github.com/openscad/openscad).
 The Git history preserves the work of the OpenSCAD developers and contributors.
 See [COPYING](COPYING) for the original license and its CGAL exception.
-English is the working language of this repository.
 
 <p><a href="https://opencollective.com/openscad/donate"><img align="right" src="https://opencollective.com/openscad/donate/button@2x.png?color=white" width="200"/></a>
 
