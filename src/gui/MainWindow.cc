@@ -995,16 +995,20 @@ void MainWindow::instantiateRoot()
 {
   // Go on and instantiate root_node, then call the continuation slot
 
-  // Invalidate renderers before we kill the CSG tree
-  this->qglview->setRenderer(nullptr);
+  // Invalidate renderers before we kill the CSG tree. Renderers own vertex
+  // buffers and delete them from their destructors, so drop them with our own
+  // GL context current.
+  this->qglview->withCurrentContext([this]() {
+    this->qglview->setRenderer(nullptr);
 #ifdef ENABLE_OPENCSG
-  this->previewRenderer = nullptr;
+    this->previewRenderer = nullptr;
 #endif
-  this->thrownTogetherRenderer = nullptr;
+    this->thrownTogetherRenderer = nullptr;
+    if (!viewportBelongsToActiveEditor()) this->geomRenderer.reset();
+  });
 
   if (!viewportBelongsToActiveEditor()) {
     if (renderedEditor) renderedEditor->contentsRendered = false;
-    this->geomRenderer.reset();
     this->rootGeom.reset();
   }
 
@@ -1031,7 +1035,8 @@ void MainWindow::instantiateRoot()
 
     AbstractNode::resetIndexCounter();
 
-    EvaluationSession session{doc.parent_path().string()};
+    auto p = doc.empty() ? fs::path{} : doc.parent_path();
+    EvaluationSession session{p.string()};
     ContextHandle<BuiltinContext> builtin_context{Context::create<BuiltinContext>(&session)};
     setRenderVariables(builtin_context);
 
@@ -2031,8 +2036,10 @@ void MainWindow::cgalRender()
     return;
   }
 
-  this->qglview->setRenderer(nullptr);
-  this->geomRenderer = nullptr;
+  this->qglview->withCurrentContext([this]() {
+    this->qglview->setRenderer(nullptr);
+    this->geomRenderer = nullptr;
+  });
   rootGeom.reset();
 
   LOG("Rendering Polygon Mesh using %1$s...",
@@ -3207,12 +3214,15 @@ void MainWindow::onTabManagerAboutToCloseEditor(EditorInterface *closingEditor)
   if (closingEditor == renderedEditor) {
     renderedEditor = nullptr;
 
-    // Invalidate renderers before we kill the CSG tree
-    this->qglview->setRenderer(nullptr);
+    // Invalidate renderers before we kill the CSG tree, with our own GL
+    // context current so their buffers are deleted where they were created.
+    this->qglview->withCurrentContext([this]() {
+      this->qglview->setRenderer(nullptr);
 #ifdef ENABLE_OPENCSG
-    this->previewRenderer = nullptr;
+      this->previewRenderer = nullptr;
 #endif
-    this->thrownTogetherRenderer = nullptr;
+      this->thrownTogetherRenderer = nullptr;
+    });
 
     // Remove previous CSG tree
     this->absoluteRootNode.reset();
