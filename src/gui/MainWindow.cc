@@ -768,14 +768,10 @@ void MainWindow::compile(bool reload, bool forcedone)
           this->raise();
         }
       }
-      // If the file has some content and there is no currently compiled content,
-      // then we force the top level compilation.
-      else {
-        auto current_doc = activeEditor->toPlainText();
-        if (current_doc.size() && lastCompiledDoc.size() == 0) {
-          shouldcompiletoplevel = true;
-        }
-      }
+      // Each tab maintains its own file timestamp. Switching documents still
+      // requires a fresh parse when the newly selected file is unchanged on disk.
+      shouldcompiletoplevel = shouldcompiletoplevel || parsedEditor != activeEditor ||
+                              (lastCompiledDoc.isEmpty() && !isEmpty());
     } else {
       shouldcompiletoplevel = true;
     }
@@ -903,6 +899,13 @@ void MainWindow::compileDone(bool didchange)
   try {
     const char *callslot;
     if (didchange) {
+      // An include reload can finish after the editor has changed tabs.
+      if (!activeEditor || parsedEditor != activeEditor) {
+        parsedEditor.clear();
+        procevents = false;
+        compileEnded();
+        return;
+      }
       instantiateRoot();
       updateCompileResult();
       callslot = afterCompileSlot;
@@ -999,6 +1002,12 @@ void MainWindow::instantiateRoot()
 #endif
   this->thrownTogetherRenderer = nullptr;
 
+  if (!viewportBelongsToActiveEditor()) {
+    if (renderedEditor) renderedEditor->contentsRendered = false;
+    this->geomRenderer.reset();
+    this->rootGeom.reset();
+  }
+
   // Remove previous CSG tree
   this->absoluteRootNode.reset();
 
@@ -1013,6 +1022,7 @@ void MainWindow::instantiateRoot()
   this->tree.setDocumentPath(doc.parent_path().string());
 
   renderedEditor = activeEditor;
+  renderedDocumentReplaced = false;
 
   if (this->rootFile) {
     // Evaluate CSG tree
@@ -1813,6 +1823,7 @@ void MainWindow::parseTopLevelDocument()
 {
   resetSuppressedMessages();
 
+  parsedEditor = activeEditor;
   this->lastCompiledDoc = activeEditor->toPlainText();
 
   activeEditor->resetHighlighting();
@@ -1822,7 +1833,8 @@ void MainWindow::parseTopLevelDocument()
 
 void MainWindow::checkAutoReload()
 {
-  if (!activeEditor->filepath.isEmpty()) {
+  if (activeEditor && (!activeEditor->filepath.isEmpty() ||
+                       (parsedEditor != activeEditor && !isEmpty()))) {
     actionReloadRenderPreview();
   }
 }
@@ -2072,7 +2084,7 @@ void MainWindow::actionRenderDone(const std::shared_ptr<const Geometry>& root_ge
 
     // Go to CGAL view mode
     viewModeRender();
-    resetMeasurementsState(true, "Click to start measuring");
+    resetMeasurementsState(viewportBelongsToActiveEditor(), "Click to start measuring");
   } else {
     resetMeasurementsState(false, "No top level geometry; render something to enable measurements");
     LOG(message_group::UI_Warning, "No top level geometry to render");
@@ -2088,8 +2100,9 @@ void MainWindow::actionRenderDone(const std::shared_ptr<const Geometry>& root_ge
     renderCompleteSoundEffect->play();
   }
 
-  renderedEditor = activeEditor;
-  activeEditor->contentsRendered = true;
+  if (renderedEditor && !renderedDocumentReplaced) {
+    renderedEditor->contentsRendered = static_cast<bool>(root_geom);
+  }
   compileEnded();
 }
 
@@ -2707,14 +2720,43 @@ void MainWindow::viewModeActionsUncheck()
   previewModeGroup->setEnabled(false);
 }
 
+bool MainWindow::viewportBelongsToActiveEditor() const
+{
+  return activeEditor && activeEditor == renderedEditor && !renderedDocumentReplaced;
+}
+
+void MainWindow::setViewportRenderer(std::shared_ptr<Renderer> renderer)
+{
+  qglview->setRenderer(viewportBelongsToActiveEditor() ? std::move(renderer) : nullptr);
+  qglview->updateColorScheme();
+  qglview->update();
+}
+
+void MainWindow::updateViewportForActiveEditor()
+{
+  if (!viewportBelongsToActiveEditor()) {
+    if (qglview->getRenderer()) {
+      setViewportRenderer(nullptr);
+      resetMeasurementsState(false, "Render (not preview) to enable measurements");
+    }
+  } else if (!qglview->getRenderer() && !GuiLocker::isLocked()) {
+#ifdef ENABLE_OPENCSG
+    if (!previewModeGroup->isEnabled() && geomRenderer) {
+      viewModeRender();
+      resetMeasurementsState(true, "Click to start measuring");
+      return;
+    }
+#endif
+    selectPreviewViewMode();
+  }
+}
+
 #ifdef ENABLE_OPENCSG
 
 void MainWindow::viewModeRender()
 {
   previewModeGroup->setEnabled(false);
-  this->qglview->setRenderer(this->geomRenderer);
-  this->qglview->updateColorScheme();
-  this->qglview->update();
+  setViewportRenderer(this->geomRenderer);
 }
 
 /*!
@@ -2731,10 +2773,7 @@ void MainWindow::viewModePreview()
   previewModeGroup->setEnabled(true);
   if (this->qglview->hasOpenCSGSupport()) {
     viewActionPreview->setChecked(true);
-    this->qglview->setRenderer(this->previewRenderer ? this->previewRenderer
-                                                     : this->thrownTogetherRenderer);
-    this->qglview->updateColorScheme();
-    this->qglview->update();
+    setViewportRenderer(this->previewRenderer ? this->previewRenderer : this->thrownTogetherRenderer);
   } else {
     viewModeThrownTogether();
   }
@@ -2761,9 +2800,7 @@ void MainWindow::viewModeThrownTogether()
 {
   previewModeGroup->setEnabled(true);
   viewActionThrownTogether->setChecked(true);
-  this->qglview->setRenderer(this->thrownTogetherRenderer);
-  this->qglview->updateColorScheme();
-  this->qglview->update();
+  setViewportRenderer(this->thrownTogetherRenderer);
 }
 
 void MainWindow::on_viewActionShowEdges_toggled(bool checked)
@@ -3192,6 +3229,11 @@ void MainWindow::onTabManagerAboutToCloseEditor(EditorInterface *closingEditor)
 
 void MainWindow::onTabManagerEditorContentReloaded(EditorInterface *reloadedEditor)
 {
+  if (reloadedEditor == parsedEditor) parsedEditor.clear();
+  if (reloadedEditor == renderedEditor) {
+    renderedDocumentReplaced = true;
+    updateViewportForActiveEditor();
+  }
   try {
     // when a new editor is created, it is important to compile the initial geometry
     // so the customizer panels are ok.
@@ -3213,6 +3255,7 @@ void MainWindow::onTabManagerEditorContentReloaded(EditorInterface *reloadedEdit
 void MainWindow::onTabManagerEditorChanged(EditorInterface *newEditor)
 {
   activeEditor = newEditor;
+  updateViewportForActiveEditor();
 
   if (newEditor == nullptr) return;
 
@@ -3228,12 +3271,6 @@ void MainWindow::onTabManagerEditorChanged(EditorInterface *newEditor)
   fontListDock->setNameSuffix(name);
   colorListDock->setNameSuffix(name);
   viewportControlDock->setNameSuffix(name);
-
-  // If there is no renderedEditor we request for a new preview if the
-  // auto-reload is enabled.
-  if (renderedEditor == nullptr && designActionAutoReload->isChecked() && !MainWindow::isEmpty()) {
-    actionRenderPreview();
-  }
 }
 
 Dock *MainWindow::findVisibleDockToActivate(int offset) const
